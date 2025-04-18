@@ -1,0 +1,155 @@
+pipeline:
+  name: pl_automated_monitoring_cloud_custodian
+  use_test_data_on_nonprod: false
+  dq_strict_mode: falsestages:
+  extract:
+    threshold_df:
+      connector: snowflake
+      options:
+        sql: "@text:sql/monitoring_thresholds.sql"
+    total_inventory_df:
+      connector: snowflake
+      options:
+        sql: "@text:sql/tier_1_ozone_total_inventory.sql"
+    not_evaluated_df:
+      connector: snowflake
+      options:
+        sql: "@text:sql/tier_1_ozone_not_evaluated.sql"
+  ingress_validation:
+    threshold_df:
+      - type: count_check
+        fatal: true
+        envs:
+          - qa
+          - prod
+        options:
+          data_location: Snowflake
+          threshold: 1
+          table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
+      - type: schema_check
+        fatal: true
+        envs:
+          - qa
+          - prod
+        options:
+          data_location: Snowflake
+          dataset_id: '3200d09e-69a8-49f1-9d61-fd164817364c'
+          attribute_map: {}
+    total_inventory_df:
+      - type: count_check
+        fatal: true
+        envs:
+          - prod
+        options:
+          data_location: Snowflake
+          threshold: 1
+          table_name: CLCN_DB.PHDP_CLOUD.OZONE_QUARTERLY_EXAMINER_REVIEW_TOTAL_COUNTS_REPORT_V01_V4
+      - type: schema_check
+        fatal: true
+        envs:
+          - prod
+        options:
+          data_location: Snowflake
+          dataset_id: '4c888bc4-13f5-4906-82e7-aa8bd09c3ee0'
+          attribute_map:
+            "control_id" : "CONTROL_ID"
+            "control_component" : "CONTROL_COMPONENT"
+            "compliance_state" : "COMPLIANCE_STATE"
+            "total_resources" : "TOTAL_EVALUATIONS_COUNT"
+      - type: schema_check
+        fatal: true
+        envs:
+          - prod
+        options:
+          data_location: Snowflake
+          dataset_id: '36e909ce-33f0-4fb7-bfa8-363d8b41b480'
+          attribute_map:
+            "fuse_id" : "FUSE_ID"
+      - type: schema_check
+        fatal: true
+        envs:
+          - prod
+        options:
+          data_location: Snowflake
+          dataset_id: '2f573519-fc83-4cb8-8a21-e65b7854ace1'
+          attribute_map:
+            "service_name" : "SERVICE_NAME"
+    not_evaluated_df:
+      - type: count_check
+        fatal: true
+        envs:
+          - prod
+        options:
+          data_location: Snowflake
+          threshold: 1
+          table_name: CLCN_DB.PHDP_CLOUD.OZONE_QUARTERLY_EXAMINER_REVIEW_TOTAL_COUNTS_REPORT_V01_V4
+    cloud_custodian_df:
+      - type: count_check
+        fatal: true
+        envs:
+          - qa
+          - prod
+        options:
+          data_location: API
+          threshold: 1
+          table_name: IPAT
+  transform:
+    ozone_evaluations_df:
+      - function: custom/tier_1_transform_cloud_custodian
+        options:
+          threshold_df: $threshold_df
+          total_inventory_df: $total_inventory_df
+          not_evaluated_df: $not_evaluated_df
+  consistency_checks:
+    - ingress: not_evaluated_df
+      egress: ozone_evaluations_df
+      type: count_consistency_check
+      informational: true
+      notes: Expected inconsistency because transform returns individual row per control.
+      envs:
+          - prod
+      options:
+        data_location: Snowflake
+        table_name: etip_controls_monitoring_metrics
+        source_data_location: Snowflake
+        source_table_name: CLCN_DB.PHDP_CLOUD.ozone_quarterly_examiner_review_total_counts_report_v01_v4
+    - ingress: total_inventory_df
+      egress: cloud_custodian_df
+      type: count_consistency_check
+      informational: true
+      notes: Expected inconsistency because transform returns individual row per control.
+      envs:
+          - qa
+          - prod
+      options:
+        data_location: Snowflake
+        table_name: etip_controls_monitoring_metrics
+        source_data_location: API
+        source_table_name: IPAT
+  load:
+    cloud_custodian_df:
+      - connector: onestream
+        options:
+          table_name: etip_controls_monitoring_metrics
+          business_application: BAENTERPRISETECHINSIGHTS
+          file_type: AVRO
+          avro_schema: "@json:avro_schema.json"
+    ozone_evaluations_df:
+      - connector: onestream
+        options:
+          table_name: etip_controls_monitoring_metrics
+          file_type: AVRO
+          avro_schema: "@json:avro_schema.json"
+          business_application: BAENTERPRISETECHINSIGHTS  prepare_test_data:
+    total_inventory_df:
+      - function: head  # only export a subset of the data
+        options:
+          n: 500000
+    not_evaluated_df:
+      - function: head  # only export a subset of the data
+        options:
+          n: 500000
+  export_test_data:
+    total_inventory_df:
+    not_evaluated_df:
+

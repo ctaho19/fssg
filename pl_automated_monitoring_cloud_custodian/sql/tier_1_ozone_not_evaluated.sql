@@ -1,0 +1,50 @@
+-- sqlfluff:dialect:snowflake
+-- sqlfluff:templater:placeholder:param_style:pyformat
+with B as (
+    select
+        COMPONENTS.CLOUD_CONTROL_VERSION_ID,
+        COMPONENTS.DISPLAY_ID,
+        COMPONENTS.FUSE_ID,
+        CONTROLS.SERVICE_NAME
+    from CLCN_DB.PHDP_CLOUD.LAZER_COMPONENTS_V03 as COMPONENTS
+    inner join
+        CLCN_DB.PHDP_CLOUD.LAZER_CONTROLS_V03 as CONTROLS
+        on
+            COMPONENTS.CLOUD_CONTROL_VERSION_ID
+            = CONTROLS.CLOUD_CONTROL_VERSION_ID
+    where
+        DATE(COMPONENTS.SF_LOAD_TIMESTAMP)
+        = (
+            select MAX(DATE(SF_LOAD_TIMESTAMP))
+            from CLCN_DB.PHDP_CLOUD.LAZER_COMPONENTS_V03
+        )
+        and COMPONENTS.FUSE_ID != ''
+        and COMPONENTS.PHASE = 'Operational'
+        and COMPONENTS.STATE = 'Complete'
+    group by
+        COMPONENTS.CLOUD_CONTROL_VERSION_ID,
+        COMPONENTS.DISPLAY_ID,
+        COMPONENTS.FUSE_ID,
+        CONTROLS.SERVICE_NAME
+)select
+    A.ACCOUNT_NUMBER,
+    A.REGION,
+    A.ENVIRONMENT,
+    A.DIVISION,
+    A.ASV,
+    A.CONTROL_ID,
+    A.RESOURCE_TYPE,
+    A.TOTAL_EVALUATIONS_COUNT,
+    B.SERVICE_NAME
+from
+    CLCN_DB.PHDP_CLOUD.OZONE_QUARTERLY_EXAMINER_REVIEW_TOTAL_COUNTS_REPORT_V01_V4
+        as A
+right join B
+    on
+        A.CONTROL_ID = B.CLOUD_CONTROL_VERSION_ID
+        and A.CONTROL_COMPONENT = B.DISPLAY_ID
+where
+    DATE(A.SF_LOAD_TIMESTAMP) = (CURRENT_DATE() - 1)
+    and (A.ENVIRONMENT = 'CDE' or A.ENVIRONMENT = 'Prod')
+    and A.COMPLIANCE_STATE = 'N/A'
+
