@@ -1,0 +1,19 @@
+-- sqlfluff:dialect:snowflake
+-- sqlfluff:templater:placeholder:param_style:pyformat
+-- Get the most recent Macie control test results (within the last 3 days)
+WITH LAST_SCAN_DATE AS (
+    SELECT MAX(REPORTDATE) AS RECENT_DATE
+    FROM CYBR_DB.PHDP_CYBR.MACIE_CONTROLS_TESTING
+    WHERE REPORTDATE BETWEEN DATEADD(DAY, -3, CURRENT_DATE()) AND CURRENT_DATE()
+)
+SELECT 
+    T.REPORTDATE,
+    T.TESTISSUCCESSFUL,
+    T.TESTID,
+    T.TESTNAME
+FROM 
+    CYBR_DB.PHDP_CYBR.MACIE_CONTROLS_TESTING T
+JOIN 
+    LAST_SCAN_DATE LSD 
+ON 
+    T.REPORTDATE = LSD.RECENT_DATE

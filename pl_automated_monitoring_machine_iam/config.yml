@@ -1,0 +1,99 @@
+pipeline:
+  name: pl_automated_monitoring_machine_iam
+  use_test_data_on_nonprod: false
+  dq_strict_mode: false
+
+stages:
+  extract:
+    thresholds_raw:
+      connector: snowflake
+      options:
+        sql: "@text:sql/monitoring_thresholds.sql"
+    iam_roles:
+      connector: snowflake
+      options:
+        sql: "@text:sql/iam_roles.sql"
+    evaluated_roles:
+      connector: snowflake
+      options:
+        sql: "@text:sql/evaluated_roles.sql"
+    sla_data:
+      connector: snowflake
+      options:
+        sql: "@text:sql/sla_data.sql"
+
+  ingress_validation:
+    thresholds_raw:
+      - type: count_check
+        fatal: true
+        envs:
+          - qa
+          - prod
+        options:
+          data_location: Snowflake
+          threshold: 1
+          table_name: CYBR_DB_COLLAB.LAB_ESRA_TCRD.CYBER_CONTROLS_MONITORING_THRESHOLD
+    iam_roles:
+      - type: count_check
+        fatal: true
+        envs:
+          - qa
+          - prod
+        options:
+          data_location: Snowflake
+          threshold: 1
+          table_name: EIAM_DB.PHDP_CYBR_IAM.IDENTITY_REPORTS_IAM_RESOURCE_V3
+          date_filter: "DATE(SF_LOAD_TIMESTAMP) = CURRENT_DATE"
+    evaluated_roles:
+      - type: count_check
+        fatal: true
+        envs:
+          - qa
+          - prod
+        options:
+          data_location: Snowflake
+          threshold: 1
+          table_name: EIAM_DB.PHDP_CYBR_IAM.IDENTITY_REPORTS_CONTROLS_VIOLATIONS_STREAM_V2
+          date_filter: "DATE(CREATE_DATE) = CURRENT_DATE"
+
+  transform:
+    monitoring_metrics:
+      - function: custom/calculate_machine_iam_metrics
+        options:
+          thresholds_raw: $thresholds_raw
+          iam_roles: $iam_roles
+          evaluated_roles: $evaluated_roles
+          sla_data: $sla_data
+
+  load:
+    monitoring_metrics:
+      - connector: onestream
+        options:
+          table_name: etip_controls_monitoring_metrics
+          file_type: AVRO
+          avro_schema: "@json:avro_schema.json"
+          business_application: BAENTERPRISETECHINSIGHTS
+
+  prepare_test_data:
+    thresholds_raw:
+      - function: head
+        options:
+          n: 500000
+    iam_roles:
+      - function: head
+        options:
+          n: 500000
+    evaluated_roles:
+      - function: head
+        options:
+          n: 500000
+    sla_data:
+      - function: head
+        options:
+          n: 500000
+
+  export_test_data:
+    thresholds_raw:
+    iam_roles:
+    evaluated_roles:
+    sla_data:

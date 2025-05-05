@@ -1,35 +1,26 @@
 import logging
-import os
 from pathlib import Path
-from typing import Dict, Any
-
-# Core ETIP/AxDP imports (adjust based on actual framework)
-from config_pipeline import ConfigPipeline # Assuming this base class exists
-from etip_env import Env # Assuming Env class provides config/secrets
-
-# Imports for API interaction (similar to reference)
-from connectors.exchange.oauth_token import refresh as refresh_oauth_token
-from connectors.ca_certs import C1_CERT_FILE # Example cert file path
-
-# Import transforms to register custom functions
-import pipelines.pl_automated_monitoring_CTRL_1077231.transform # noqa: F401
+from typing import Dict, Any, List, Optional, Tuple
+import pandas as pd
+import requests
+import json
+import time
+from datetime import datetime
+from config_pipeline import ConfigPipeline
+from etip_env import Env
+from connectors.exchange.oauth_token import refresh
+from connectors.ca_certs import C1_CERT_FILE
+from transform_library import transformer
 
 logger = logging.getLogger(__name__)
 
-# --- Constants/Configuration (should match transform.py or be passed) ---
-# These might be better defined centrally or passed via context/config
-# API_BASE_URL = "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling"
-# CONFIG_URL = f"{API_BASE_URL}/search-resource-configurations"
-# Note: The specific API endpoint URL might be passed directly to the transform function
-
 def run(
-    env: Env, # Pass environment context containing secrets/config
+    env: Env,
     is_export_test_data: bool = False,
     is_load: bool = True,
     dq_actions: bool = True,
 ):
-    """Main entry point called by the ETIP framework."""
-    pipeline = PLAutomatedMonitoringCtrl1077231(env) # Instantiate the specific pipeline class
+    pipeline = PLAutomatedMonitoringCtrl1077231(env)
     pipeline.configure_from_filename(str(Path(__file__).parent / "config.yml"))
     logger.info(f"Running pipeline: {pipeline.pipeline_name}")
     return (
@@ -38,19 +29,14 @@ def run(
         else pipeline.run(load=is_load, dq_actions=dq_actions)
     )
 
-# Define a pipeline class inheriting from the framework's base class
 class PLAutomatedMonitoringCtrl1077231(ConfigPipeline):
     def __init__(self,
-        env: Env, # Receive environment context
+        env: Env,
     ) -> None:
         super().__init__(env)
-        # Store env for later use (e.g., fetching secrets)
         self.env = env
 
-        # API Configuration (URL could also be in env/config)
-        self.cloud_tooling_api_url = "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
-        # Fetch OAuth credentials securely from the environment
-        # These must be configured for the pipeline's service account
+        self.cloudradar_api_url = "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
         try:
             self.client_id = self.env.exchange.client_id
             self.client_secret = self.env.exchange.client_secret
@@ -60,11 +46,9 @@ class PLAutomatedMonitoringCtrl1077231(ConfigPipeline):
             raise ValueError(f"Environment object missing expected OAuth attributes: {e}") from e
 
     def _get_api_token(self) -> str:
-        """Refreshes and returns the API OAuth token string (including 'Bearer')."""
         logger.info(f"Refreshing API token from {self.exchange_url}...")
         try:
-            # Call the token refresh function from the framework's library
-            token = refresh_oauth_token(
+            token = refresh(
                 client_id=self.client_id,
                 client_secret=self.client_secret,
                 exchange_url=self.exchange_url,
@@ -73,86 +57,184 @@ class PLAutomatedMonitoringCtrl1077231(ConfigPipeline):
             return f"Bearer {token}"
         except Exception as e:
             logger.error(f"Failed to refresh API token: {e}")
-            # Propagate the error to halt the pipeline if auth fails
             raise RuntimeError("API token refresh failed") from e
 
-    # Override the transform method to inject API context
     def transform(self) -> None:
-        """Injects API authentication token and config into context before running transforms."""
         logger.info("Preparing transform stage: Fetching API token...")
         api_auth_token = self._get_api_token()
 
-        # Add necessary context for the transform function(s)
-        # The transform function expects these keys in its 'context' argument
         self.context["api_auth_token"] = api_auth_token
-        self.context["cloud_tooling_api_url"] = self.cloud_tooling_api_url
-        self.context["api_verify_ssl"] = C1_CERT_FILE # Pass CA cert bundle path
+        self.context["cloudradar_api_url"] = self.cloudradar_api_url
+        self.context["api_verify_ssl"] = C1_CERT_FILE
 
         logger.info("API context injected. Proceeding with config-defined transforms.")
-        # Call the parent class's transform method to execute steps from config.yml
         super().transform()
 
+def _make_api_request(url: str, method: str, auth_token: str, verify_ssl: Any, timeout: int, max_retries: int, payload: Optional[Dict] = None, params: Optional[Dict] = None) -> requests.Response:
+    headers = {"Accept": "application/json;v=1.0", "Authorization": auth_token, "Content-Type": "application/json"}
+    for retry in range(max_retries + 1):
+        try:
+            response = requests.request(method=method, url=url, headers=headers, json=payload, params=params, verify=verify_ssl, timeout=timeout)
+            if response.status_code == 429:
+                wait_time = min(2 ** retry, 30)
+                time.sleep(wait_time)
+                if retry == max_retries:
+                    response.raise_for_status()
+                continue
+            elif response.ok:
+                return response
+            else:
+                if retry < max_retries:
+                    wait_time = min(2 ** retry, 15)
+                    time.sleep(wait_time)
+                else:
+                    response.raise_for_status()
+        except requests.exceptions.Timeout:
+            if retry < max_retries:
+                wait_time = min(2 ** retry, 15)
+                time.sleep(wait_time)
+            else:
+                raise
+        except Exception as e:
+            if retry < max_retries:
+                wait_time = min(2 ** retry, 15)
+                time.sleep(wait_time)
+            else:
+                raise
+    raise Exception(f"API request failed after {max_retries} retries to {url}")
 
-# --- Main Execution Block (for local testing) ---
+def fetch_all_resources(api_url: str, search_payload: Dict, auth_token: str, verify_ssl: Any, config_key_full: str, limit: Optional[int] = None, timeout: int = 60, max_retries: int = 3) -> List[Dict]:
+    all_resources = []
+    next_record_key = ""
+    response_fields = ["resourceId", "amazonResourceName", "resourceType", "awsRegion", "accountName", "awsAccountId", "configurationList", config_key_full]
+    fetch_payload = {"searchParameters": search_payload.get("searchParameters", [{}]), "responseFields": response_fields}
+    while True:
+        params = {"limit": min(limit, 10000) if limit else 10000}
+        if next_record_key:
+            params["nextRecordKey"] = next_record_key
+        response = _make_api_request(url=api_url, method="POST", auth_token=auth_token, verify_ssl=verify_ssl, timeout=timeout, max_retries=max_retries, payload=fetch_payload, params=params)
+        data = response.json()
+        resources = data.get("resourceConfigurations", [])
+        new_next_record_key = data.get("nextRecordKey", "")
+        all_resources.extend(resources)
+        next_record_key = new_next_record_key
+        if not next_record_key or (limit and len(all_resources) >= limit):
+            break
+    return all_resources
+
+def get_compliance_status(metric: float, alert_threshold: float, warning_threshold: Optional[float] = None) -> str:
+    metric_percentage = metric * 100
+    try:
+        alert_threshold_f = float(alert_threshold)
+    except (TypeError, ValueError):
+        return "Red"
+    warning_threshold_f = None
+    if warning_threshold is not None:
+        try:
+            warning_threshold_f = float(warning_threshold)
+        except (TypeError, ValueError):
+            warning_threshold_f = None
+    if metric_percentage >= alert_threshold_f:
+        return "Green"
+    elif warning_threshold_f is not None and metric_percentage >= warning_threshold_f:
+        return "Yellow"
+    else:
+        return "Red"
+
+def _filter_resources(resources: List[Dict], config_key: str, config_value: str) -> Tuple[int, int, List[Dict], List[Dict]]:
+    tier1_numerator = 0
+    tier2_numerator = 0
+    tier1_non_compliant = []
+    tier2_non_compliant = []
+    config_key_full = f"configuration.{config_key}"
+    fields_to_keep = ["resourceId", "amazonResourceName", "resourceType", "awsRegion", "accountName", "awsAccountId", config_key_full]
+    for resource in resources:
+        config_list = resource.get("configurationList", [])
+        config_item = next((c for c in config_list if c.get("configurationName") == config_key_full), None)
+        actual_value = config_item.get("configurationValue") if config_item else None
+        if actual_value and str(actual_value).strip():
+            tier1_numerator += 1
+            if str(actual_value) == config_value:
+                tier2_numerator += 1
+            else:
+                non_compliant_info = {f: resource.get(f, "N/A") for f in fields_to_keep}
+                non_compliant_info[config_key_full] = actual_value
+                tier2_non_compliant.append(non_compliant_info)
+        else:
+            non_compliant_info = {f: resource.get(f, "N/A") for f in fields_to_keep}
+            non_compliant_info[config_key_full] = actual_value if actual_value is not None else "MISSING"
+            tier1_non_compliant.append(non_compliant_info)
+    return tier1_numerator, tier2_numerator, tier1_non_compliant, tier2_non_compliant
+
+@transformer
+def calculate_ctrl1077231_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any], resource_type: str, config_key: str, config_value: str, ctrl_id: str, tier1_metric_id: int, tier2_metric_id: int) -> pd.DataFrame:
+    try:
+        api_url = context["cloudradar_api_url"]
+        auth_token = context["api_auth_token"]
+        verify_ssl = context["api_verify_ssl"]
+        config_key_full = f"configuration.{config_key}"
+        search_payload = {"searchParameters": [{"resourceType": resource_type}]}
+        
+        try:
+            resources = fetch_all_resources(api_url, search_payload, auth_token, verify_ssl, config_key_full)
+        except requests.RequestException as e:
+            logger.error(f"API request failed: {str(e)}")
+            raise RuntimeError(f"Critical API fetch failure: {str(e)}") from e
+        
+        tier1_numerator, tier2_numerator, tier1_non_compliant, tier2_non_compliant = _filter_resources(resources, config_key, config_value)
+        total_resources = len(resources)
+        tier1_metric = tier1_numerator / total_resources if total_resources > 0 else 0
+        tier2_metric = tier2_numerator / tier1_numerator if tier1_numerator > 0 else 0
+        
+        # Safely access thresholds with error handling for missing metrics
+        try:
+            t1_filter = thresholds_raw["monitoring_metric_id"] == tier1_metric_id
+            if not any(t1_filter):
+                raise ValueError(f"Missing threshold data for tier1_metric_id={tier1_metric_id}")
+            t1_threshold = thresholds_raw[t1_filter].iloc[0]
+            
+            t2_filter = thresholds_raw["monitoring_metric_id"] == tier2_metric_id
+            if not any(t2_filter):
+                raise ValueError(f"Missing threshold data for tier2_metric_id={tier2_metric_id}")
+            t2_threshold = thresholds_raw[t2_filter].iloc[0]
+        except (IndexError, ValueError) as e:
+            logger.error(f"Error accessing threshold data: {str(e)}")
+            raise RuntimeError(f"Failed to access threshold data: {str(e)}") from e
+        
+        t1_status = get_compliance_status(tier1_metric, t1_threshold["alerting_threshold"], t1_threshold["warning_threshold"])
+        t2_status = get_compliance_status(tier2_metric, t2_threshold["alerting_threshold"], t2_threshold["warning_threshold"])
+        now = int(datetime.utcnow().timestamp() * 1000)
+        results = [
+            {"date": now, "control_id": ctrl_id, "monitoring_metric_id": tier1_metric_id, "monitoring_metric_value": float(tier1_metric * 100), "compliance_status": t1_status, "numerator": int(tier1_numerator), "denominator": int(total_resources), "non_compliant_resources": [json.dumps(x) for x in tier1_non_compliant] if tier1_non_compliant else None},
+            {"date": now, "control_id": ctrl_id, "monitoring_metric_id": tier2_metric_id, "monitoring_metric_value": float(tier2_metric * 100), "compliance_status": t2_status, "numerator": int(tier2_numerator), "denominator": int(tier1_numerator), "non_compliant_resources": [json.dumps(x) for x in tier2_non_compliant] if tier2_non_compliant else None}
+        ]
+        df = pd.DataFrame(results)
+        df["date"] = df["date"].astype("int64")
+        df["numerator"] = df["numerator"].astype("int64")
+        df["denominator"] = df["denominator"].astype("int64")
+        return df
+    except Exception as e:
+        if not isinstance(e, RuntimeError):
+            logger.error(f"Unexpected error in calculate_ctrl1077231_metrics: {str(e)}")
+            raise RuntimeError(f"Failed to calculate metrics: {str(e)}") from e
+        raise
+
 if __name__ == "__main__":
-    # Setup basic logging for local run
-    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
-        level=log_level,
+        level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         force=True,
     )
     logger = logging.getLogger(__name__)
-
-    logger.warning("--- Running Pipeline Locally --- ")
-    logger.warning("Ensure MOCK environment variables for OAuth are set correctly!")
-
-    # Mock the Env object needed by the pipeline
-    # Fetch required secrets from environment variables for local run
-    class MockExchangeConfig:
-        client_id = os.environ.get("MOCK_CLIENT_ID")
-        client_secret = os.environ.get("MOCK_CLIENT_SECRET")
-        exchange_url = os.environ.get("MOCK_EXCHANGE_URL")
-
-    class MockSnowflakeConfig:
-        # Add required Snowflake mock attributes if base class needs them
-        account = os.environ.get("MOCK_SNOWFLAKE_ACCOUNT")
-        user = os.environ.get("MOCK_SNOWFLAKE_USER")
-        password = os.environ.get("MOCK_SNOWFLAKE_PASSWORD")
-        role = os.environ.get("MOCK_SNOWFLAKE_ROLE")
-        warehouse = os.environ.get("MOCK_SNOWFLAKE_WAREHOUSE")
-        database = os.environ.get("MOCK_SNOWFLAKE_DATABASE")
-        schema = os.environ.get("MOCK_SNOWFLAKE_SCHEMA")
-
-    class MockEnv:
-        exchange = MockExchangeConfig()
-        snowflake = MockSnowflakeConfig()
-        # Add any other attributes ConfigPipeline might expect from Env
-
-    mock_env = MockEnv()
-
-    # Basic validation for mock secrets
-    missing_secrets = False
-    if not mock_env.exchange.client_id:
-        logger.error("Missing MOCK_CLIENT_ID environment variable.")
-        missing_secrets = True
-    if not mock_env.exchange.client_secret:
-        logger.error("Missing MOCK_CLIENT_SECRET environment variable.")
-        missing_secrets = True
-    if not mock_env.exchange.exchange_url:
-        logger.error("Missing MOCK_EXCHANGE_URL environment variable.")
-        missing_secrets = True
-    # Add checks for Snowflake mock vars if needed
-
-    if missing_secrets:
-        logger.error("Halting local execution due to missing mock secrets.")
-        exit(1)
-
-    logger.info("Mock environment configured. Starting local pipeline run...")
+    
+    from etip_env import set_env_vars
+    env = set_env_vars()
+    
+    logger.info("Starting local pipeline run...")
     try:
-        # Run the pipeline, typically without loading to the actual destination
-        run(env=mock_env, is_load=False, dq_actions=False)
-        logger.info("--- Local Pipeline Run Finished Successfully ---")
+        run(env=env, is_load=False, dq_actions=False)
+        logger.info("Pipeline run completed successfully")
     except Exception as e:
-        logger.exception(f"--- Local Pipeline Run Failed: {e} ---") 
+        logger.exception("Pipeline run failed")
+        exit(1)

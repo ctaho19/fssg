@@ -13,6 +13,4 @@ select
     metric_threshold_end_date
 from
     etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
-where 
-    metric_threshold_end_date is Null
-    and control_id = 'CTRL-1077231'
+where metric_threshold_end_date is Null

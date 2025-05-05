@@ -1,0 +1,28 @@
+pipeline:
+  name: pl_automated_monitoring_CTRL_1101994
+  description: "Pipeline to process Symantec Proxy test outcomes for CTRL-1101994"
+  avro_schema_file: "avro_schema.json"
+  ingress_validation:
+    enabled: true
+
+extract:
+  - name: thresholds
+    engine: snowflake
+    query_file: sql/monitoring_thresholds.sql
+    query_params:
+      control_id: CTRL-1101994
+
+transform:
+  - name: symantec_proxy_metrics
+    function: calculate_symantec_proxy_metrics
+    args:
+      thresholds_raw: "{{ extract.thresholds }}"
+      ctrl_id: CTRL-1101994
+      tier2_metric_id: 53
+
+load:
+  - name: metrics
+    source: "{{ transform.symantec_proxy_metrics }}"
+    target: kafka
+    topic_name: "cyber-monitoring-metrics-v1"
+    schema_name: "control_monitoring_metrics-value"
