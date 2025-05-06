@@ -2,7 +2,6 @@ import datetime
 import json
 import unittest.mock as mock
 from typing import Optional, List, Dict, Any, Union
-import time
 import pandas as pd
 import pytest
 from freezegun import freeze_time
@@ -749,48 +748,50 @@ def test_pipeline_end_to_end(mocker):
             pipe.output_df = result_df
             return result_df
         
-        # Apply the mock transform method
-        with mocker.patch.object(pipe, 'transform', side_effect=mock_transform):
-            with mocker.patch.object(pipe, 'run', return_value=None) as mock_run:
-                # Configure and run the pipeline
-                pipe.configure_from_filename("/path/to/config.yml")
-                pipe.run()
-                
-                # Verify our mocks were called
-                assert mock_refresh.called
-                assert mock_request.called
-                assert mock_run.called
-                
-                # Verify the output dataframe has the expected structure
-                assert hasattr(pipe, 'output_df'), "Pipeline should have an output_df attribute after transformation"
-                result_df = pipe.output_df
-                
-                # Basic validation of the output
-                assert len(result_df) == 2, "Should have results for two metrics (Tier 1 and Tier 2)"
-                
-                # Check metric IDs
-                assert result_df.iloc[0]["monitoring_metric_id"] == 1, "First row should be metric ID 1 (Tier 1)"
-                assert result_df.iloc[1]["monitoring_metric_id"] == 2, "Second row should be metric ID 2 (Tier 2)"
-                
-                # Verify the timestamp matches our frozen time
-                assert result_df.iloc[0]["date"] == FIXED_TIMESTAMP_MS, "Timestamp should match our frozen time"
-                
-                # Check core calculations - Tier 1 (4 out of 5 resources have a value)
-                assert result_df.iloc[0]["numerator"] == 4, "Tier 1 numerator should be 4"
-                assert result_df.iloc[0]["denominator"] == 5, "Tier 1 denominator should be 5"
-                assert result_df.iloc[0]["monitoring_metric_value"] == 80.0, "Tier 1 metric value should be 80%"
-                
-                # Check core calculations - Tier 2 (3 out of 4 resources with value have 'required')
-                assert result_df.iloc[1]["numerator"] == 3, "Tier 2 numerator should be 3"
-                assert result_df.iloc[1]["denominator"] == 4, "Tier 2 denominator should be 4"
-                assert result_df.iloc[1]["monitoring_metric_value"] == 75.0, "Tier 2 metric value should be 75%"
-                
-                # Check compliance status against thresholds
-                assert result_df.iloc[0]["compliance_status"] == "Red", "Tier 1 status should be Red (80% < 95%)"
-                assert result_df.iloc[1]["compliance_status"] == "Green", "Tier 2 status should be Green (75% >= 50%)"
-                
-                # Check non-compliant resources lists are properly populated
-                assert result_df.iloc[0]["non_compliant_resources"] is not None, "Tier 1 should have non-compliant resources"
-                assert len(result_df.iloc[0]["non_compliant_resources"]) == 1, "Tier 1 should have 1 non-compliant resource"
-                assert result_df.iloc[1]["non_compliant_resources"] is not None, "Tier 2 should have non-compliant resources"
-                assert len(result_df.iloc[1]["non_compliant_resources"]) == 1, "Tier 2 should have 1 non-compliant resource"
+        # Mock the configuration and validate methods so we don't need a real config file
+        mocker.patch.object(pipe, 'configure_from_filename')
+        mocker.patch.object(pipe, 'validate_and_merge')
+        
+        # Apply the mock transform method - not using context managers to avoid pytest warnings
+        mock_transform_method = mocker.patch.object(pipe, 'transform', side_effect=mock_transform)
+        
+        # Run the pipeline without configuring from a file
+        pipe.run()
+        
+        # Verify our mocks were called
+        assert mock_refresh.called
+        assert mock_request.called
+        
+        # Verify the output dataframe has the expected structure
+        assert hasattr(pipe, 'output_df'), "Pipeline should have an output_df attribute after transformation"
+        result_df = pipe.output_df
+        
+        # Basic validation of the output
+        assert len(result_df) == 2, "Should have results for two metrics (Tier 1 and Tier 2)"
+        
+        # Check metric IDs
+        assert result_df.iloc[0]["monitoring_metric_id"] == 1, "First row should be metric ID 1 (Tier 1)"
+        assert result_df.iloc[1]["monitoring_metric_id"] == 2, "Second row should be metric ID 2 (Tier 2)"
+        
+        # Verify the timestamp matches our frozen time
+        assert result_df.iloc[0]["date"] == FIXED_TIMESTAMP_MS, "Timestamp should match our frozen time"
+        
+        # Check core calculations - Tier 1 (4 out of 5 resources have a value)
+        assert result_df.iloc[0]["numerator"] == 4, "Tier 1 numerator should be 4"
+        assert result_df.iloc[0]["denominator"] == 5, "Tier 1 denominator should be 5" 
+        assert result_df.iloc[0]["monitoring_metric_value"] == 80.0, "Tier 1 metric value should be 80%"
+        
+        # Check core calculations - Tier 2 (3 out of 4 resources with value have 'required')
+        assert result_df.iloc[1]["numerator"] == 3, "Tier 2 numerator should be 3"
+        assert result_df.iloc[1]["denominator"] == 4, "Tier 2 denominator should be 4"
+        assert result_df.iloc[1]["monitoring_metric_value"] == 75.0, "Tier 2 metric value should be 75%"
+        
+        # Check compliance status against thresholds
+        assert result_df.iloc[0]["compliance_status"] == "Red", "Tier 1 status should be Red (80% < 95%)"
+        assert result_df.iloc[1]["compliance_status"] == "Green", "Tier 2 status should be Green (75% >= 50%)"
+        
+        # Check non-compliant resources lists are properly populated
+        assert result_df.iloc[0]["non_compliant_resources"] is not None, "Tier 1 should have non-compliant resources"
+        assert len(result_df.iloc[0]["non_compliant_resources"]) == 1, "Tier 1 should have 1 non-compliant resource"
+        assert result_df.iloc[1]["non_compliant_resources"] is not None, "Tier 2 should have non-compliant resources"
+        assert len(result_df.iloc[1]["non_compliant_resources"]) == 1, "Tier 2 should have 1 non-compliant resource"
