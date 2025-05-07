@@ -737,10 +737,17 @@ def test_pipeline_end_to_end(mocker):
         mocker.patch.object(pipe, 'validate_and_merge')
         
         # Set up the pipeline stages dictionary - this is key to avoiding the KeyError
+        # Make sure all mocks have explicit return values to prevent 'TypeError: Mock object is not iterable' errors
+        extract_mock = mock.Mock()
+        extract_mock.return_value = None  # Explicit non-iterable return value
+        
+        load_mock = mock.Mock()
+        load_mock.return_value = None  # Explicit non-iterable return value
+        
         pipe._pipeline_stages = {
-            'extract': mock.Mock(return_value=None),
+            'extract': extract_mock,
             'transform': pipe.transform,  # Use the real transform method to ensure token refresh is called
-            'load': mock.Mock(return_value=None)
+            'load': load_mock
         }
         
         # Use the real run method - this ensures all hooks are properly called including OAuth refresh
