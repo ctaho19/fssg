@@ -745,9 +745,13 @@ def test_make_api_request_retries_exceptions(mocker):
     mock_sleep = mocker.patch("time.sleep")
     
     # Test general exception with retry
-    mock_request.side_effect = [Exception("Network error"), mock.Mock()]
-    mock_request.side_effect[1].status_code = 200
-    mock_request.side_effect[1].ok = True
+    # Create a mock response object first
+    mock_response = mock.Mock()
+    mock_response.status_code = 200
+    mock_response.ok = True
+    
+    # Then set the side_effect to first raise an exception, then return our mock
+    mock_request.side_effect = [Exception("Network error"), mock_response]
     
     response = pipeline._make_api_request(
         url="https://test.url",
@@ -766,9 +770,13 @@ def test_make_api_request_retries_exceptions(mocker):
     mock_sleep.reset_mock()
     
     # Test timeout exception with retry
-    mock_request.side_effect = [requests.exceptions.Timeout("Connection timeout"), mock.Mock()]
-    mock_request.side_effect[1].status_code = 200
-    mock_request.side_effect[1].ok = True
+    # Create another mock response for the second test
+    mock_response2 = mock.Mock()
+    mock_response2.status_code = 200
+    mock_response2.ok = True
+    
+    # Set up the side effect for the timeout test
+    mock_request.side_effect = [requests.exceptions.Timeout("Connection timeout"), mock_response2]
     
     response = pipeline._make_api_request(
         url="https://test.url",
@@ -834,21 +842,23 @@ def test_calculate_metrics_generic_exception(mocker):
 
 def test_main_function_execution(mocker):
     """Test the main function execution path in the pipeline module."""
-    # Mock functions to avoid actual execution
-    mock_set_env = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.set_env_vars")
+    # Create mock objects to replace imported functions
+    mock_env = mock.Mock()
+    mock_set_env = mocker.patch("etip_env.set_env_vars", return_value=mock_env)
     mock_run = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.run")
     mock_logger = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.logger")
     mock_exit = mocker.patch("sys.exit")
     
-    # Success case
-    mock_set_env.return_value = mock.Mock()
+    # Success case - set up the mock return values
     mock_run.return_value = None
     
-    # Execute the main block directly
+    # Execute the main block directly, but using imports that match our mocks
+    # The key fix is to import from etip_env instead of from the pipeline module
     code = """
 if True:
-    from pipelines.pl_automated_monitoring_ctrl_1077231.pipeline import set_env_vars, run, logger
     import sys
+    from etip_env import set_env_vars
+    from pipelines.pl_automated_monitoring_ctrl_1077231.pipeline import run, logger
     
     env = set_env_vars()
     try:
@@ -862,9 +872,9 @@ if True:
     
     # Verify success path
     assert not mock_exit.called
-    mock_run.assert_called_once_with(env=mock_set_env.return_value, is_load=False, dq_actions=False)
+    mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
     
-    # Verify failure path
+    # Reset mocks for failure test
     mock_run.reset_mock()
     mock_run.side_effect = Exception("Pipeline failed")
     
