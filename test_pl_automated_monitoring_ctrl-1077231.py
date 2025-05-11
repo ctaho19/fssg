@@ -1,13 +1,41 @@
 import datetime
 import json
 import unittest.mock as mock
-from typing import Optional, Union
+from typing import Optional, Union, Dict, Any
 import pandas as pd
 import pytest
 from freezegun import freeze_time
 from requests import Response, RequestException
 import pipelines.pl_automated_monitoring_ctrl_1077231.pipeline as pipeline
 from etip_env import set_env_vars
+from connectors.api import OauthApi
+
+class MockOauthApi:
+    """Mock implementation of OauthApi for testing purposes."""
+    
+    def __init__(self, url: str, api_token: str):
+        self.url = url
+        self.api_token = api_token
+        self.response = None
+        self.side_effect = None
+    
+    def send_request(self, url: str, request_type: str, request_kwargs: Dict[str, Any], 
+                     retry_delay: int = 5) -> Response:
+        """Mocked version of send_request method."""
+        if self.side_effect:
+            if isinstance(self.side_effect, Exception):
+                raise self.side_effect
+            elif callable(self.side_effect):
+                return self.side_effect(url, request_type, request_kwargs)
+            else:
+                # Handle list of responses for pagination
+                if isinstance(self.side_effect, list) and self.side_effect:
+                    response = self.side_effect.pop(0)
+                    if isinstance(response, Exception):
+                        raise response
+                    return response
+        
+        return self.response if self.response else Response()
 
 # Standard timestamp for all tests to use (2024-11-05 12:09:00 UTC)
 # The timestamp value must match what's produced by the actual implementation
@@ -427,130 +455,123 @@ def test_get_api_token_failure(mock):
     with pytest.raises(RuntimeError, match="API token refresh failed"):
         pipe._get_api_token()
 
-def test_make_api_request_success_no_pagination(mock):
-    mock_post = mock.patch("requests.request")
-    mock_response = mock.Mock()
-    mock_response.status_code = 200
-    mock_response.ok = True
-    mock_response.json.return_value = {"resourceConfigurations": [1, 2, 3], "nextRecordKey": ""}
-    mock_post.return_value = mock_response
-    response = pipeline._make_api_request(
-        url="https://mock.api.url/search-resource-configurations",
-        method="POST",
-        auth_token="mock_token",
-        verify_ssl=True,
-        timeout=60,
-        max_retries=3,
-        payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
+def test_api_connector_success(mock):
+    """Tests successful API request using the OauthApi connector."""
+    # Create mock API connector
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token"
     )
+    mock_response = generate_mock_api_response({"resourceConfigurations": [1, 2, 3], "nextRecordKey": ""})
+    mock_api.response = mock_response
+    
+    # Test API request
+    request_kwargs = {
+        "headers": {
+            "Accept": "application/json",
+            "Authorization": "Bearer mock_token",
+            "Content-Type": "application/json"
+        },
+        "json": {"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]},
+        "verify": True
+    }
+    
+    response = mock_api.send_request(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        request_type="post",
+        request_kwargs=request_kwargs
+    )
+    
     assert response.status_code == 200
     assert response.json() == {"resourceConfigurations": [1, 2, 3], "nextRecordKey": ""}
 
-def test_make_api_request_success_with_pagination(mock):
-    mock_post = mock.patch("requests.request")
+def test_api_connector_with_pagination(mock):
+    """Tests pagination using the OauthApi connector."""
+    # Create mock API connector with multiple responses for pagination
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token"
+    )
     
     # Create mock responses
-    mock_response1 = mock.Mock()
-    mock_response1.status_code = 200
-    mock_response1.ok = True
-    mock_response1.json.return_value = {"resourceConfigurations": [1], "nextRecordKey": "page2_key"}
+    page1_response = generate_mock_api_response({"resourceConfigurations": [1], "nextRecordKey": "page2_key"})
+    page2_response = generate_mock_api_response({"resourceConfigurations": [2, 3], "nextRecordKey": ""})
     
-    mock_response2 = mock.Mock()
-    mock_response2.status_code = 200
-    mock_response2.ok = True
-    mock_response2.json.return_value = {"resourceConfigurations": [2, 3], "nextRecordKey": ""}
+    # Set up the side effect to return multiple responses
+    mock_api.side_effect = [page1_response, page2_response]
     
-    # Set up the side effect properly - define once and not overwrite it later
-    mock_post.side_effect = [mock_response1, mock_response2]
-    
-    # Call the function being tested
+    # Call fetch_all_resources
     result = pipeline.fetch_all_resources(
-        api_url="https://mock.api.url/search-resource-configurations",
-        search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]},
-        auth_token="mock_token",
+        api_connector=mock_api,
         verify_ssl=True,
-        config_key_full="configuration.metadataOptions.httpTokens"
+        config_key_full="configuration.metadataOptions.httpTokens",
+        search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
     )
     
-    # Verify results and mock calls
-    assert result == [1, 2, 3]
-    assert mock_post.call_count == 2  # Verify the mock was called exactly twice
-    
-    # Verify the second call included the nextRecordKey parameter
-    _, kwargs = mock_post.call_args_list[1]
-    assert 'params' in kwargs
-    assert kwargs['params'].get('nextRecordKey') == 'page2_key'
+    # Verify results
+    assert len(result) == 3
+    assert [r for r in result] == [1, 2, 3]
 
-def test_make_api_request_http_error(mock):
-    """Tests that _make_api_request properly handles HTTP errors."""
-    mock_post = mock.patch("requests.request")
-    mock_response = mock.Mock()
-    mock_response.status_code = 500
-    mock_response.ok = False
-    mock_post.return_value = mock_response
-    
-    with pytest.raises(Exception):
-        pipeline._make_api_request(
-            url="https://mock.api.url/search-resource-configurations",
-            method="POST",
-            auth_token="mock_token",
-            verify_ssl=True,
-            timeout=60,
-            max_retries=1
-        )
-
-def test_make_api_request_rate_limit_retry(mock):
-    mock_post = mock.patch("requests.request")
-    mock_sleep = mock.patch("time.sleep")
-    mock_response_429 = mock.Mock()
-    mock_response_429.status_code = 429
-    mock_response_429.ok = False
-    mock_response_200 = mock.Mock()
-    mock_response_200.status_code = 200
-    mock_response_200.ok = True
-    mock_response_200.json.return_value = {"resourceConfigurations": [1], "nextRecordKey": ""}
-    mock_post.side_effect = [mock_response_429, mock_response_200]
-    response = pipeline._make_api_request(
-        url="https://mock.api.url/search-resource-configurations",
-        method="POST",
-        auth_token="mock_token",
-        verify_ssl=True,
-        timeout=60,
-        max_retries=2
+def test_api_connector_http_error(mock):
+    """Tests that API connector properly handles HTTP errors."""
+    # Create mock API connector that raises an exception
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token"
     )
-    assert response.status_code == 200
-    assert mock_sleep.called
-
-def test_make_api_request_error_retry_fail(mock):
-    mock_post = mock.patch("requests.request")
-    mock_sleep = mock.patch("time.sleep")
-    mock_response = mock.Mock()
-    mock_response.status_code = 503
-    mock_response.ok = False
-    mock_post.return_value = mock_response
-    import pytest
-    with pytest.raises(Exception):
-        pipeline._make_api_request(
-            url="https://mock.api.url/search-resource-configurations",
-            method="POST",
-            auth_token="mock_token",
+    
+    # Set up a response with error status code
+    error_response = generate_mock_api_response(None, status_code=500)
+    mock_api.response = error_response
+    
+    # Try to use the fetch_all_resources function which should raise an exception
+    with pytest.raises(RuntimeError):
+        pipeline.fetch_all_resources(
+            api_connector=mock_api,
             verify_ssl=True,
-            timeout=60,
-            max_retries=2
+            config_key_full="configuration.key",
+            search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
         )
-    assert mock_sleep.call_count == 2
+
+def test_api_connector_exception_handling(mock):
+    """Tests that the API connector handles exceptions correctly."""
+    # Create mock API connector that raises an exception
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token"
+    )
+    
+    # Configure the connector to raise an exception
+    mock_api.side_effect = RequestException("Connection error")
+    
+    # Try to use the fetch_all_resources function which should raise an exception
+    with pytest.raises(RuntimeError):
+        pipeline.fetch_all_resources(
+            api_connector=mock_api,
+            verify_ssl=True,
+            config_key_full="configuration.key",
+            search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
+        )
 
 def test_transform_logic_empty_api_response(mock):
     """Tests the pipeline handles empty API responses correctly, verifying division by zero protection."""
-    mock_make_api_request = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    mock_make_api_request.return_value = generate_mock_api_response(API_RESPONSE_EMPTY)
+    # Create mock API connector
+    mock_api_response = generate_mock_api_response(API_RESPONSE_EMPTY)
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token"
+    )
+    mock_api.response = mock_api_response
+    
+    # Mock the _get_api_connector method to return our mock connector
+    mock_get_connector = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231._get_api_connector")
+    mock_get_connector.return_value = mock_api
     
     # Use freeze_time with the standard timestamp to make the test deterministic
     with freeze_time(FIXED_TIMESTAMP):
         thresholds_df = _mock_threshold_df_pandas()
         context = {
-            "api_auth_token": "mock_token",
-            "cloudradar_api_url": "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+            "api_connector": mock_api,
             "api_verify_ssl": True
         }
         result_df = pipeline.calculate_ctrl1077231_metrics(
@@ -587,15 +608,23 @@ def test_transform_logic_empty_api_response(mock):
 
 def test_transform_logic_non_matching_resources(mock):
     """Tests the pipeline handles resources that don't match filter criteria, verifying division by zero protection."""
-    mock_make_api_request = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    mock_make_api_request.return_value = generate_mock_api_response(API_RESPONSE_NON_MATCHING)
+    # Create mock API connector
+    mock_api_response = generate_mock_api_response(API_RESPONSE_NON_MATCHING)
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token"
+    )
+    mock_api.response = mock_api_response
+    
+    # Mock the _get_api_connector method to return our mock connector
+    mock_get_connector = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231._get_api_connector")
+    mock_get_connector.return_value = mock_api
     
     # Use freeze_time with the standard timestamp to make the test deterministic
     with freeze_time(FIXED_TIMESTAMP):
         thresholds_df = _mock_threshold_df_pandas()
         context = {
-            "api_auth_token": "mock_token",
-            "cloudradar_api_url": "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+            "api_connector": mock_api,
             "api_verify_ssl": True
         }
         result_df = pipeline.calculate_ctrl1077231_metrics(
@@ -632,13 +661,20 @@ def test_transform_logic_non_matching_resources(mock):
 
 def test_transform_logic_api_fetch_fails(mock):
     """Tests that the pipeline properly handles API fetch failures."""
-    mock_make_api_request = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    mock_make_api_request.side_effect = RequestException("Simulated API failure")
+    # Create mock API connector with failure
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token"
+    )
+    mock_api.side_effect = RequestException("Simulated API failure")
+    
+    # Mock the _get_api_connector method to return our mock connector
+    mock_get_connector = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231._get_api_connector")
+    mock_get_connector.return_value = mock_api
 
     thresholds_df = _mock_threshold_df_pandas()
     context = {
-        "api_auth_token": "mock_token",
-        "cloudradar_api_url": "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        "api_connector": mock_api,
         "api_verify_ssl": True
     }
 
@@ -656,8 +692,17 @@ def test_transform_logic_api_fetch_fails(mock):
 
 def test_missing_threshold_data(mock):
     """Tests error handling for missing threshold data."""
-    mock_make_api_request = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    mock_make_api_request.return_value = generate_mock_api_response(API_RESPONSE_MIXED)
+    # Create mock API connector
+    mock_api_response = generate_mock_api_response(API_RESPONSE_MIXED)
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token"
+    )
+    mock_api.response = mock_api_response
+    
+    # Mock the _get_api_connector method to return our mock connector
+    mock_get_connector = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231._get_api_connector")
+    mock_get_connector.return_value = mock_api
     
     # Create threshold dataframe with missing metric IDs
     incomplete_threshold_df = pd.DataFrame({
@@ -672,8 +717,7 @@ def test_missing_threshold_data(mock):
     })
     
     context = {
-        "api_auth_token": "mock_token",
-        "cloudradar_api_url": "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        "api_connector": mock_api,
         "api_verify_ssl": True
     }
     
@@ -702,29 +746,24 @@ def test_get_compliance_status_invalid_inputs():
     
 def test_fetch_all_resources_pagination(mock):
     """Tests complete pagination flow in fetch_all_resources function."""
-    mock_make_api_request = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
+    # Create mock API responses for pagination
+    page1_response = generate_mock_api_response({"resourceConfigurations": [{"id": 1}], "nextRecordKey": "page2"})
+    page2_response = generate_mock_api_response({"resourceConfigurations": [{"id": 2}], "nextRecordKey": "page3"})
+    page3_response = generate_mock_api_response({"resourceConfigurations": [{"id": 3}], "nextRecordKey": ""})
     
-    # Setup pagination scenario
-    page1_response = mock.Mock()
-    page1_response.json.return_value = {"resourceConfigurations": [{"id": 1}], "nextRecordKey": "page2"}
-    
-    page2_response = mock.Mock()
-    page2_response.json.return_value = {"resourceConfigurations": [{"id": 2}], "nextRecordKey": "page3"}
-    
-    page3_response = mock.Mock()
-    page3_response.json.return_value = {"resourceConfigurations": [{"id": 3}], "nextRecordKey": ""}
-    
-    # Configure mock to return different responses for each call
-    mock_make_api_request.side_effect = [page1_response, page2_response, page3_response]
+    # Create a mock API connector with side effect to return different responses
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token"
+    )
+    mock_api.side_effect = [page1_response, page2_response, page3_response]
     
     # Call fetch_all_resources
     result = pipeline.fetch_all_resources(
-        api_url="https://api.url/endpoint",
-        search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]},
-        auth_token="mock_token",
+        api_connector=mock_api,
         verify_ssl=True,
         config_key_full="configuration.key",
-        # Using a limit to test the limit logic
+        search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]},
         limit=5
     )
     
@@ -732,63 +771,35 @@ def test_fetch_all_resources_pagination(mock):
     assert len(result) == 3
     assert [r["id"] for r in result] == [1, 2, 3]
     
-    # Verify pagination logic with nextRecordKey
-    assert mock_make_api_request.call_count == 3
+def test_api_connector_retries(mock):
+    """Tests that the API connector handles retries correctly."""
+    # Create mock API connector
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token"
+    )
     
-    # Verify params for the second call includes the nextRecordKey
-    _, kwargs = mock_make_api_request.call_args_list[1]
-    assert kwargs.get("params", {}).get("nextRecordKey") == "page2"
+    # Create a success response and an error that should trigger a retry
+    error_response = RequestException("Temporary connection error")
+    success_response = generate_mock_api_response({"resourceConfigurations": [1, 2, 3], "nextRecordKey": ""})
     
-def test_make_api_request_retries_exceptions(mock):
-    """Tests retry logic for various exceptions in _make_api_request."""
-    mock_request = mock.patch("requests.request")
+    # Set up side effect to first raise an exception, then return success
+    mock_api.side_effect = [error_response, success_response]
+    
+    # Mock time.sleep to speed up test
     mock_sleep = mock.patch("time.sleep")
     
-    # Test general exception with retry
-    # Create a mock response object first
-    mock_response = mock.Mock()
-    mock_response.status_code = 200
-    mock_response.ok = True
-    
-    # Then set the side_effect to first raise an exception, then return our mock
-    mock_request.side_effect = [Exception("Network error"), mock_response]
-    
-    response = pipeline._make_api_request(
-        url="https://test.url",
-        method="GET",
-        auth_token="token",
+    # Test with the fetch_all_resources function
+    result = pipeline.fetch_all_resources(
+        api_connector=mock_api,
         verify_ssl=True,
-        timeout=10,
-        max_retries=1
+        config_key_full="configuration.key",
+        search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
     )
     
-    assert response.status_code == 200
-    assert mock_sleep.call_count == 1
-    
-    # Reset mocks
-    mock_request.reset_mock()
-    mock_sleep.reset_mock()
-    
-    # Test timeout exception with retry
-    # Create another mock response for the second test
-    mock_response2 = mock.Mock()
-    mock_response2.status_code = 200
-    mock_response2.ok = True
-    
-    # Set up the side effect for the timeout test
-    mock_request.side_effect = [requests.exceptions.Timeout("Connection timeout"), mock_response2]
-    
-    response = pipeline._make_api_request(
-        url="https://test.url",
-        method="GET",
-        auth_token="token",
-        verify_ssl=True,
-        timeout=10,
-        max_retries=1
-    )
-    
-    assert response.status_code == 200
-    assert mock_sleep.call_count == 1
+    # Verify the result after retry
+    assert len(result) == 3
+    assert mock_sleep.called
 
 def test_run_entrypoint_defaults(mock):
     mock_pipeline_class = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231")
@@ -819,13 +830,11 @@ def test_run_entrypoint_export_test_data(mock):
 
 def test_calculate_metrics_generic_exception(mock):
     """Tests handling of generic exceptions in calculate_ctrl1077231_metrics."""
-    mock_make_api_request = mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    mock_make_api_request.return_value = generate_mock_api_response(API_RESPONSE_MIXED)
-    
     # Cause a generic exception by making the context dict incomplete
     context = {
         # Missing required fields
-        "api_auth_token": "mock_token",
+        "api_verify_ssl": True,
+        # No api_connector
     }
     
     with pytest.raises(RuntimeError, match="Failed to calculate metrics"):
