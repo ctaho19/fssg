@@ -257,9 +257,12 @@ class PLAutomatedMonitoringMachineIAM(ConfigPipeline):
         self.exchange_url = env.exchange.exchange_url
         self.cloudradar_api_url = "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
 
+        # For backwards compatibility with tests, add reference to global CONTROL_CONFIGS
+        self.CONTROL_CONFIGS = CONTROL_CONFIGS
+        
         # Create ID mappings for cloud control IDs to CTRL IDs
-        self.cloud_id_to_ctrl_id = {cfg["cloud_control_id"]: cfg["ctrl_id"] for cfg in self.CONTROL_CONFIGS}
-        self.ctrl_id_to_cloud_id = {cfg["ctrl_id"]: cfg["cloud_control_id"] for cfg in self.CONTROL_CONFIGS}
+        self.cloud_id_to_ctrl_id = {cfg["cloud_control_id"]: cfg["ctrl_id"] for cfg in CONTROL_CONFIGS}
+        self.ctrl_id_to_cloud_id = {cfg["ctrl_id"]: cfg["cloud_control_id"] for cfg in CONTROL_CONFIGS}
 
     def _get_api_token(self) -> str:
         """Get OAuth token for API access.
@@ -293,12 +296,12 @@ class PLAutomatedMonitoringMachineIAM(ConfigPipeline):
         """Extract data from sources."""
         # Set up evaluated roles parameters for each control
         self.context["evaluated_roles_params"] = [
-            {"control_id": cfg["cloud_control_id"]} for cfg in self.CONTROL_CONFIGS
+            {"control_id": cfg["cloud_control_id"]} for cfg in CONTROL_CONFIGS
         ]
 
         # Set up thresholds parameters with all control IDs
         self.context["thresholds_raw_params"] = {
-            "control_ids": ", ".join(f"'{cfg['ctrl_id']}'" for cfg in self.CONTROL_CONFIGS)
+            "control_ids": ", ".join(f"'{cfg['ctrl_id']}'" for cfg in CONTROL_CONFIGS)
         }
 
         # Call parent extract method
