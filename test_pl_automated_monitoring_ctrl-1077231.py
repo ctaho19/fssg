@@ -1,18 +1,13 @@
 import datetime
 import json
 import unittest.mock as mock
-<<<<<<< HEAD
 from typing import Optional, Union, Dict, Any
-=======
-from typing import Optional, Union
->>>>>>> 811141112988f1f36e1530958178577266bd0d61
 import pandas as pd
 import pytest
 from freezegun import freeze_time
 from requests import Response, RequestException
 import pipelines.pl_automated_monitoring_ctrl_1077231.pipeline as pipeline
 from etip_env import set_env_vars
-<<<<<<< HEAD
 from connectors.api import OauthApi
 
 class MockOauthApi:
@@ -48,8 +43,6 @@ class MockOauthApi:
             default_response = Response()
             default_response.status_code = 200
             return default_response
-=======
->>>>>>> 811141112988f1f36e1530958178577266bd0d61
 
 # Standard timestamp for all tests to use (2024-11-05 12:09:00 UTC)
 # The timestamp value must match what's produced by the actual implementation
@@ -444,7 +437,6 @@ def test_pipeline_init_success():
     assert pipe.client_secret == "etip-client-secret"
     assert pipe.exchange_url == "https://api.cloud.capitalone.com/exchange"
 
-<<<<<<< HEAD
 def test_get_api_token_success():
     with mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.refresh") as mock_refresh:
         mock_refresh.return_value = "mock_token_value"
@@ -504,57 +496,6 @@ def test_api_connector_success():
         url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
         request_type="post",
         request_kwargs=request_kwargs
-=======
-def test_get_api_token_success(mocker):
-    mock_refresh = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.refresh")
-    mock_refresh.return_value = "mock_token_value"
-    class MockExchangeConfig:
-        def __init__(self, client_id="etip-client-id", client_secret="etip-client-secret", exchange_url="https://api.cloud.capitalone.com/exchange"):
-            self.client_id = client_id
-            self.client_secret = client_secret
-            self.exchange_url = exchange_url
-    env = set_env_vars("qa")
-    env.exchange = MockExchangeConfig()
-    pipe = pipeline.PLAutomatedMonitoringCtrl1077231(env)
-    token = pipe._get_api_token()
-    assert token == "Bearer mock_token_value"
-    mock_refresh.assert_called_once_with(
-        client_id="etip-client-id",
-        client_secret="etip-client-secret",
-        exchange_url="https://api.cloud.capitalone.com/exchange"
-    )
-
-def test_get_api_token_failure(mocker):
-    mock_refresh = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.refresh")
-    mock_refresh.side_effect = Exception("Token refresh failed")
-    class MockExchangeConfig:
-        def __init__(self, client_id="etip-client-id", client_secret="etip-client-secret", exchange_url="https://api.cloud.capitalone.com/exchange"):
-            self.client_id = client_id
-            self.client_secret = client_secret
-            self.exchange_url = exchange_url
-    env = set_env_vars("qa")
-    env.exchange = MockExchangeConfig()
-    pipe = pipeline.PLAutomatedMonitoringCtrl1077231(env)
-    import pytest
-    with pytest.raises(RuntimeError, match="API token refresh failed"):
-        pipe._get_api_token()
-
-def test_make_api_request_success_no_pagination(mocker):
-    mock_post = mocker.patch("requests.request")
-    mock_response = mock.Mock()
-    mock_response.status_code = 200
-    mock_response.ok = True
-    mock_response.json.return_value = {"resourceConfigurations": [1, 2, 3], "nextRecordKey": ""}
-    mock_post.return_value = mock_response
-    response = pipeline._make_api_request(
-        url="https://mock.api.url/search-resource-configurations",
-        method="POST",
-        auth_token="mock_token",
-        verify_ssl=True,
-        timeout=60,
-        max_retries=3,
-        payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
->>>>>>> 811141112988f1f36e1530958178577266bd0d61
     )
     
     assert response.status_code == 200
@@ -583,7 +524,6 @@ def test_api_connector_with_pagination():
         search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
     )
     
-<<<<<<< HEAD
     # Verify results
     assert len(result) == 3
     assert [r for r in result] == [1, 2, 3]
@@ -671,24 +611,6 @@ def test_transform_logic_non_matching_resources():
         api_token="Bearer mock_token"
     )
     mock_api.response = mock_api_response
-=======
-    # Verify results and mock calls
-    assert result == [1, 2, 3]
-    assert mock_post.call_count == 2  # Verify the mock was called exactly twice
-    
-    # Verify the second call included the nextRecordKey parameter
-    _, kwargs = mock_post.call_args_list[1]
-    assert 'params' in kwargs
-    assert kwargs['params'].get('nextRecordKey') == 'page2_key'
-
-def test_make_api_request_http_error(mocker):
-    """Tests that _make_api_request properly handles HTTP errors."""
-    mock_post = mocker.patch("requests.request")
-    mock_response = mock.Mock()
-    mock_response.status_code = 500
-    mock_response.ok = False
-    mock_post.return_value = mock_response
->>>>>>> 811141112988f1f36e1530958178577266bd0d61
     
     # Mock the _get_api_connector method to return our mock connector
     with mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231._get_api_connector") as mock_get_connector:
@@ -735,7 +657,6 @@ def test_transform_logic_api_fetch_fails():
         url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
         api_token="Bearer mock_token"
     )
-<<<<<<< HEAD
     mock_api.side_effect = RequestException("Simulated API failure")
     
     # Mock the _get_api_connector method to return our mock connector
@@ -769,34 +690,6 @@ def test_missing_threshold_data():
         api_token="Bearer mock_token"
     )
     mock_api.response = mock_api_response
-=======
-    assert response.status_code == 200
-    assert mock_sleep.called
-
-def test_make_api_request_error_retry_fail(mocker):
-    mock_post = mocker.patch("requests.request")
-    mock_sleep = mocker.patch("time.sleep")
-    mock_response = mock.Mock()
-    mock_response.status_code = 503
-    mock_response.ok = False
-    mock_post.return_value = mock_response
-    import pytest
-    with pytest.raises(Exception):
-        pipeline._make_api_request(
-            url="https://mock.api.url/search-resource-configurations",
-            method="POST",
-            auth_token="mock_token",
-            verify_ssl=True,
-            timeout=60,
-            max_retries=2
-        )
-    assert mock_sleep.call_count == 2
-
-def test_transform_logic_empty_api_response(mocker):
-    """Tests the pipeline handles empty API responses correctly, verifying division by zero protection."""
-    mock_make_api_request = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    mock_make_api_request.return_value = generate_mock_api_response(API_RESPONSE_EMPTY)
->>>>>>> 811141112988f1f36e1530958178577266bd0d61
     
     # Mock the _get_api_connector method to return our mock connector
     with mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231._get_api_connector") as mock_get_connector:
@@ -814,22 +707,6 @@ def test_transform_logic_empty_api_response(mocker):
             "metric_threshold_end_date": [None]
         })
         
-<<<<<<< HEAD
-=======
-        # Also check the data types
-        assert result_df["date"].dtype == "int64"
-        assert result_df["numerator"].dtype == "int64"
-        assert result_df["denominator"].dtype == "int64"
-
-def test_transform_logic_non_matching_resources(mocker):
-    """Tests the pipeline handles resources that don't match filter criteria, verifying division by zero protection."""
-    mock_make_api_request = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    mock_make_api_request.return_value = generate_mock_api_response(API_RESPONSE_NON_MATCHING)
-    
-    # Use freeze_time with the standard timestamp to make the test deterministic
-    with freeze_time(FIXED_TIMESTAMP):
-        thresholds_df = _mock_threshold_df_pandas()
->>>>>>> 811141112988f1f36e1530958178577266bd0d61
         context = {
             "api_connector": mock_api,
             "api_verify_ssl": True
@@ -843,7 +720,6 @@ def test_transform_logic_non_matching_resources(mocker):
                 context=context
             )
         
-<<<<<<< HEAD
 def test_get_compliance_status_invalid_inputs():
     """Tests edge cases in get_compliance_status function."""
     # Test with invalid alert_threshold (TypeError case)
@@ -946,26 +822,6 @@ def test_run_entrypoint_export_test_data():
 def test_calculate_metrics_generic_exception():
     """Tests handling of generic exceptions in calculate_ctrl1077231_metrics."""
     # Cause a generic exception by making the context dict incomplete
-=======
-        # For tier 2, since tier1_numerator is 0, division by zero protection should kick in
-        assert result_df.iloc[1]["numerator"] == 0
-        assert result_df.iloc[1]["denominator"] == 0
-        assert result_df.iloc[1]["monitoring_metric_value"] == 0.0
-        assert result_df.iloc[1]["compliance_status"] == "Red"
-        
-        # Check non-compliant resources for tier 1 - all resources should be listed as non-compliant
-        assert len(result_df.iloc[0]["non_compliant_resources"]) == 2
-        
-        # Since tier1_numerator is 0, tier2 should have None for non_compliant_resources
-        assert result_df.iloc[1]["non_compliant_resources"] is None
-
-def test_transform_logic_api_fetch_fails(mocker):
-    """Tests that the pipeline properly handles API fetch failures."""
-    mock_make_api_request = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    mock_make_api_request.side_effect = RequestException("Simulated API failure")
-
-    thresholds_df = _mock_threshold_df_pandas()
->>>>>>> 811141112988f1f36e1530958178577266bd0d61
     context = {
         # Missing required fields
         "api_verify_ssl": True,
@@ -979,7 +835,6 @@ def test_transform_logic_api_fetch_fails(mocker):
             context=context
         )
 
-<<<<<<< HEAD
 def test_main_function_execution():
     """Test the main function execution path in the pipeline module."""
     # Create mock objects to replace imported functions
@@ -997,209 +852,6 @@ def test_main_function_execution():
                     # Execute the main block directly, but using imports that match our mocks
                     # The key fix is to import from etip_env instead of from the pipeline module
                     code = """
-=======
-def test_missing_threshold_data(mocker):
-    """Tests error handling for missing threshold data."""
-    mock_make_api_request = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    mock_make_api_request.return_value = generate_mock_api_response(API_RESPONSE_MIXED)
-    
-    # Create threshold dataframe with missing metric IDs
-    incomplete_threshold_df = pd.DataFrame({
-        "monitoring_metric_id": [999],  # Different ID than what we'll request
-        "control_id": ["CTRL-1077231"],
-        "monitoring_metric_tier": ["Tier 1"],
-        "warning_threshold": [97.0],
-        "alerting_threshold": [95.0],
-        "control_executor": ["Individual_1"],
-        "metric_threshold_start_date": [datetime.datetime(2024, 11, 5, 12, 9, 0, 21180)],
-        "metric_threshold_end_date": [None]
-    })
-    
-    context = {
-        "api_auth_token": "mock_token",
-        "cloudradar_api_url": "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
-        "api_verify_ssl": True
-    }
-    
-    # Should raise error due to missing tier1_metric_id
-    with pytest.raises(RuntimeError, match="Failed to access threshold data"):
-        pipeline.calculate_ctrl1077231_metrics(
-            thresholds_raw=incomplete_threshold_df,
-            context=context,
-            resource_type="AWS::EC2::Instance",
-            config_key="metadataOptions.httpTokens",
-            config_value="required",
-            ctrl_id="CTRL-1077231",
-            tier1_metric_id=1,  # Not in the dataframe
-            tier2_metric_id=2   # Not in the dataframe
-        )
-        
-def test_get_compliance_status_invalid_inputs():
-    """Tests edge cases in get_compliance_status function."""
-    # Test with invalid alert_threshold (TypeError case)
-    status = pipeline.get_compliance_status(0.8, "not_a_number")
-    assert status == "Red"
-    
-    # Test with invalid warning_threshold (ValueError case)
-    status = pipeline.get_compliance_status(0.8, 95.0, "invalid")
-    assert status == "Red"
-    
-def test_fetch_all_resources_pagination(mocker):
-    """Tests complete pagination flow in fetch_all_resources function."""
-    mock_make_api_request = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    
-    # Setup pagination scenario
-    page1_response = mock.Mock()
-    page1_response.json.return_value = {"resourceConfigurations": [{"id": 1}], "nextRecordKey": "page2"}
-    
-    page2_response = mock.Mock()
-    page2_response.json.return_value = {"resourceConfigurations": [{"id": 2}], "nextRecordKey": "page3"}
-    
-    page3_response = mock.Mock()
-    page3_response.json.return_value = {"resourceConfigurations": [{"id": 3}], "nextRecordKey": ""}
-    
-    # Configure mock to return different responses for each call
-    mock_make_api_request.side_effect = [page1_response, page2_response, page3_response]
-    
-    # Call fetch_all_resources
-    result = pipeline.fetch_all_resources(
-        api_url="https://api.url/endpoint",
-        search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]},
-        auth_token="mock_token",
-        verify_ssl=True,
-        config_key_full="configuration.key",
-        # Using a limit to test the limit logic
-        limit=5
-    )
-    
-    # Assert we got all three pages of results
-    assert len(result) == 3
-    assert [r["id"] for r in result] == [1, 2, 3]
-    
-    # Verify pagination logic with nextRecordKey
-    assert mock_make_api_request.call_count == 3
-    
-    # Verify params for the second call includes the nextRecordKey
-    _, kwargs = mock_make_api_request.call_args_list[1]
-    assert kwargs.get("params", {}).get("nextRecordKey") == "page2"
-    
-def test_make_api_request_retries_exceptions(mocker):
-    """Tests retry logic for various exceptions in _make_api_request."""
-    mock_request = mocker.patch("requests.request")
-    mock_sleep = mocker.patch("time.sleep")
-    
-    # Test general exception with retry
-    # Create a mock response object first
-    mock_response = mock.Mock()
-    mock_response.status_code = 200
-    mock_response.ok = True
-    
-    # Then set the side_effect to first raise an exception, then return our mock
-    mock_request.side_effect = [Exception("Network error"), mock_response]
-    
-    response = pipeline._make_api_request(
-        url="https://test.url",
-        method="GET",
-        auth_token="token",
-        verify_ssl=True,
-        timeout=10,
-        max_retries=1
-    )
-    
-    assert response.status_code == 200
-    assert mock_sleep.call_count == 1
-    
-    # Reset mocks
-    mock_request.reset_mock()
-    mock_sleep.reset_mock()
-    
-    # Test timeout exception with retry
-    # Create another mock response for the second test
-    mock_response2 = mock.Mock()
-    mock_response2.status_code = 200
-    mock_response2.ok = True
-    
-    # Set up the side effect for the timeout test
-    mock_request.side_effect = [requests.exceptions.Timeout("Connection timeout"), mock_response2]
-    
-    response = pipeline._make_api_request(
-        url="https://test.url",
-        method="GET",
-        auth_token="token",
-        verify_ssl=True,
-        timeout=10,
-        max_retries=1
-    )
-    
-    assert response.status_code == 200
-    assert mock_sleep.call_count == 1
-
-def test_run_entrypoint_defaults(mocker):
-    mock_pipeline_class = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231")
-    mock_pipeline_instance = mock_pipeline_class.return_value
-    mock_pipeline_instance.run.return_value = None
-    env = set_env_vars("qa")
-    pipeline.run(env=env)
-    mock_pipeline_class.assert_called_once_with(env)
-    mock_pipeline_instance.run.assert_called_once()
-
-def test_run_entrypoint_no_load_no_dq(mocker):
-    mock_pipeline_class = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231")
-    mock_pipeline_instance = mock_pipeline_class.return_value
-    mock_pipeline_instance.run.return_value = None
-    env = set_env_vars("qa")
-    pipeline.run(env=env, is_load=False, dq_actions=False)
-    mock_pipeline_class.assert_called_once_with(env)
-    mock_pipeline_instance.run.assert_called_once_with(load=False, dq_actions=False)
-
-def test_run_entrypoint_export_test_data(mocker):
-    mock_pipeline_class = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231")
-    mock_pipeline_instance = mock_pipeline_class.return_value
-    mock_pipeline_instance.run.return_value = None
-    env = set_env_vars("qa")
-    pipeline.run(env=env, is_export_test_data=True)
-    mock_pipeline_class.assert_called_once_with(env)
-    mock_pipeline_instance.run_test_data_export.assert_called_once_with(dq_actions=True)
-
-def test_calculate_metrics_generic_exception(mocker):
-    """Tests handling of generic exceptions in calculate_ctrl1077231_metrics."""
-    mock_make_api_request = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline._make_api_request")
-    mock_make_api_request.return_value = generate_mock_api_response(API_RESPONSE_MIXED)
-    
-    # Cause a generic exception by making the context dict incomplete
-    context = {
-        # Missing required fields
-        "api_auth_token": "mock_token",
-    }
-    
-    with pytest.raises(RuntimeError, match="Failed to calculate metrics"):
-        pipeline.calculate_ctrl1077231_metrics(
-            thresholds_raw=_mock_threshold_df_pandas(),
-            context=context,
-            resource_type="AWS::EC2::Instance",
-            config_key="metadataOptions.httpTokens",
-            config_value="required",
-            ctrl_id="CTRL-1077231",
-            tier1_metric_id=1,
-            tier2_metric_id=2
-        )
-
-def test_main_function_execution(mocker):
-    """Test the main function execution path in the pipeline module."""
-    # Create mock objects to replace imported functions
-    mock_env = mock.Mock()
-    mock_set_env = mocker.patch("etip_env.set_env_vars", return_value=mock_env)
-    mock_run = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.run")
-    mock_logger = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.logger")
-    mock_exit = mocker.patch("sys.exit")
-    
-    # Success case - set up the mock return values
-    mock_run.return_value = None
-    
-    # Execute the main block directly, but using imports that match our mocks
-    # The key fix is to import from etip_env instead of from the pipeline module
-    code = """
->>>>>>> 811141112988f1f36e1530958178577266bd0d61
 if True:
     import sys
     from etip_env import set_env_vars
@@ -1213,7 +865,6 @@ if True:
         logger.exception("Pipeline run failed")
         sys.exit(1)
     """
-<<<<<<< HEAD
                     exec(code)
                     
                     # Verify success path
@@ -1232,32 +883,11 @@ if True:
                     mock_logger.exception.assert_called_once_with("Pipeline run failed")
 
 def test_pipeline_end_to_end():
-=======
-    exec(code)
-    
-    # Verify success path
-    assert not mock_exit.called
-    mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
-    
-    # Reset mocks for failure test
-    mock_run.reset_mock()
-    mock_run.side_effect = Exception("Pipeline failed")
-    
-    # Execute again
-    exec(code)
-    
-    # Verify failure path
-    mock_exit.assert_called_once_with(1)
-    mock_logger.exception.assert_called_once_with("Pipeline run failed")
-
-def test_pipeline_end_to_end(mocker):
->>>>>>> 811141112988f1f36e1530958178577266bd0d61
     """
     Consolidated end-to-end test that validates the core functionality of the pipeline.
     This test replaces multiple individual tests that were flaky while still validating
     the key pipeline behaviors.
     """
-<<<<<<< HEAD
     # Use context managers for all mocks to ensure proper cleanup
     with mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.refresh") as mock_refresh:
         with mock.patch("requests.request") as mock_request:
@@ -1356,117 +986,3 @@ def test_pipeline_end_to_end(mocker):
                                     assert len(result_df.iloc[0]["non_compliant_resources"]) == 1, "Tier 1 should have 1 non-compliant resource"
                                     assert result_df.iloc[1]["non_compliant_resources"] is not None, "Tier 2 should have non-compliant resources"
                                     assert len(result_df.iloc[1]["non_compliant_resources"]) == 1, "Tier 2 should have 1 non-compliant resource"
-=======
-    # Mock the token refresh
-    mock_refresh = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.refresh")
-    mock_refresh.return_value = "mock_token_value"
-    
-    # Mock the API request to return our standard test data
-    mock_request = mocker.patch("requests.request")
-    mock_response = mock.Mock()
-    mock_response.status_code = 200
-    mock_response.ok = True
-    mock_response.json.return_value = API_RESPONSE_MIXED
-    mock_request.return_value = mock_response
-    
-    # Set up mocks for file handling that the ConfigPipeline object might need
-    mock_open = mocker.patch("builtins.open", mocker.mock_open(read_data="pipeline:\n  name: test"))
-    mock_path_exists = mocker.patch("os.path.exists", return_value=True)
-    
-    # Ensure consistent timestamps
-    with freeze_time(FIXED_TIMESTAMP):
-        # Create a mock environment with the OAuth config
-        class MockExchangeConfig:
-            def __init__(self):
-                self.client_id = "etip-client-id"
-                self.client_secret = "etip-client-secret"
-                self.exchange_url = "https://api.cloud.capitalone.com/exchange"
-        
-        # Initialize the environment
-        env = set_env_vars("qa")
-        env.exchange = MockExchangeConfig()
-        
-        # Create the pipeline instance
-        pipe = pipeline.PLAutomatedMonitoringCtrl1077231(env)
-        
-        # Don't override the transform method completely, so the original _get_api_token will be called
-        # Instead, patch the core calculation function to return our test data
-        pipe.context = {}  # Initialize context
-        
-        mock_calculate = mocker.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.calculate_ctrl1077231_metrics")
-        
-        # Create expected result dataframe
-        expected_df = _expected_output_mixed_df_pandas()
-        mock_calculate.return_value = expected_df
-        
-        # Store the result for later assertions
-        pipe.output_df = expected_df
-        
-        # Mock the configuration and validate methods so we don't need a real config file
-        mocker.patch.object(pipe, 'configure_from_filename')
-        mocker.patch.object(pipe, 'validate_and_merge')
-        
-        # Create a minimal working version of transform that avoids errors
-        # While still testing the core ETL functionality
-        
-        # 1. First verify OAuth token refresh works
-        api_token = pipe._get_api_token()
-        assert api_token.startswith("Bearer ")
-        assert mock_refresh.called, "OAuth token refresh function should have been called"
-        
-        # 2. Setup the context with the token - this is what transform() would normally do
-        pipe.context["api_auth_token"] = api_token
-        pipe.context["cloudradar_api_url"] = pipe.cloudradar_api_url
-        pipe.context["api_verify_ssl"] = True
-        
-        # 3. Call the actual data transformation function directly to test ETL
-        # This is what the transform stage would ultimately call
-        result_df = pipeline.calculate_ctrl1077231_metrics(
-            thresholds_raw=_mock_threshold_df_pandas(),
-            context=pipe.context,
-            resource_type="AWS::EC2::Instance",
-            config_key="metadataOptions.httpTokens",
-            config_value="required",
-            ctrl_id="CTRL-1077231",
-            tier1_metric_id=1,
-            tier2_metric_id=2
-        )
-        
-        # 4. Save the result as the pipeline would do
-        pipe.output_df = result_df
-        assert mock_refresh.called, "OAuth token refresh function should have been called"
-        
-        # Verify the output dataframe has the expected structure
-        assert hasattr(pipe, 'output_df'), "Pipeline should have an output_df attribute after transformation"
-        result_df = pipe.output_df
-        
-        # Basic validation of the output
-        assert len(result_df) == 2, "Should have results for two metrics (Tier 1 and Tier 2)"
-        
-        # Check metric IDs
-        assert result_df.iloc[0]["monitoring_metric_id"] == 1, "First row should be metric ID 1 (Tier 1)"
-        assert result_df.iloc[1]["monitoring_metric_id"] == 2, "Second row should be metric ID 2 (Tier 2)"
-        
-        # Verify the timestamp matches our frozen time
-        assert result_df.iloc[0]["date"] == FIXED_TIMESTAMP_MS, "Timestamp should match our frozen time"
-        
-        # Check core calculations - Tier 1 (4 out of 5 resources have a value)
-        assert result_df.iloc[0]["numerator"] == 4, "Tier 1 numerator should be 4"
-        assert result_df.iloc[0]["denominator"] == 5, "Tier 1 denominator should be 5" 
-        assert result_df.iloc[0]["monitoring_metric_value"] == 80.0, "Tier 1 metric value should be 80%"
-        
-        # Check core calculations - Tier 2 (3 out of 4 resources with value have 'required')
-        assert result_df.iloc[1]["numerator"] == 3, "Tier 2 numerator should be 3"
-        assert result_df.iloc[1]["denominator"] == 4, "Tier 2 denominator should be 4"
-        assert result_df.iloc[1]["monitoring_metric_value"] == 75.0, "Tier 2 metric value should be 75%"
-        
-        # Check compliance status against thresholds
-        assert result_df.iloc[0]["compliance_status"] == "Red", "Tier 1 status should be Red (80% < 95%)"
-        assert result_df.iloc[1]["compliance_status"] == "Green", "Tier 2 status should be Green (75% >= 50%)"
-        
-        # Check non-compliant resources lists are properly populated
-        assert result_df.iloc[0]["non_compliant_resources"] is not None, "Tier 1 should have non-compliant resources"
-        assert len(result_df.iloc[0]["non_compliant_resources"]) == 1, "Tier 1 should have 1 non-compliant resource"
-        assert result_df.iloc[1]["non_compliant_resources"] is not None, "Tier 2 should have non-compliant resources"
-        assert len(result_df.iloc[1]["non_compliant_resources"]) == 1, "Tier 2 should have 1 non-compliant resource"
->>>>>>> 811141112988f1f36e1530958178577266bd0d61

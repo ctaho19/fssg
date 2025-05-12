@@ -252,4 +252,8 @@ def calculate_ctrl1077231_metrics(thresholds_raw: pd.DataFrame, context: Dict[st
         if not isinstance(e, RuntimeError):
             logger.error(f"Unexpected error in calculate_ctrl1077231_metrics: {str(e)}")
             raise RuntimeError(f"Failed to calculate metrics: {str(e)}") from e
+<<<<<<< HEAD
         raise
+=======
+        raise
+>>>>>>> 811141112988f1f36e1530958178577266bd0d61
