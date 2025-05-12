@@ -363,14 +363,19 @@ def test_fetch_all_resources_error_status():
     )
     
     # Create a mock response with 404 status code
-    mock_response = Response()
-    mock_response.status_code = 404
-    mock_response._content = json.dumps({"error": "Resource not found"}).encode("utf-8")
+    error_response = Response()
+    error_response.status_code = 404
+    error_response._content = json.dumps({"error": "Resource not found"}).encode("utf-8")
+    error_response.request = mock.Mock()
+    error_response.request.url = "https://api.example.com/resources"
+    error_response.request.method = "POST"
     
-    mock_api.response = mock_response
+    # Make sure test uses side_effect instead of response attribute
+    # This ensures the mock is called properly in the loop
+    mock_api.side_effect = error_response
     
     # Verify the function raises a RuntimeError for error status codes
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Error occurred while retrieving resources with status code 404"):
         pipeline.fetch_all_resources(
             api_connector=mock_api,
             verify_ssl=True,
