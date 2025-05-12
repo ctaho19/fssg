@@ -524,18 +524,14 @@ def test_api_connector_http_error():
     error_response = generate_mock_api_response({"error": "Internal Server Error"}, status_code=500)
     mock_api.response = error_response
     
-    try:
-        # Try to use the fetch_all_resources function which should raise an exception
-        with pytest.raises(RuntimeError):
-            pipeline.fetch_all_resources(
-                api_connector=mock_api,
-                verify_ssl=True,
-                config_key_full="configuration.key",
-                search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
-            )
-    except RequestException as e:
-        # If we get a connection error, verify it's network related
-        assert any(msg in str(e) for msg in ["Connection", "Network", "Timeout", "Connection reset"])
+    # The fetch_all_resources function should raise a RuntimeError when encountering a non-2xx status code
+    with pytest.raises(RuntimeError, match="Error occurred while retrieving resources with status code 500"):
+        pipeline.fetch_all_resources(
+            api_connector=mock_api,
+            verify_ssl=True,
+            config_key_full="configuration.key",
+            search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
+        )
 
 def test_api_connector_exception_handling():
     """Tests that the API connector handles exceptions correctly."""
