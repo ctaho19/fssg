@@ -135,13 +135,12 @@ def format_non_compliant_resources(resources_df: Optional[pd.DataFrame]) -> Opti
         logger.debug("resources_df is None, returning None")
         return None
         
-    # Handle empty DataFrame
-    if not isinstance(resources_df, pd.DataFrame):
-        logger.warning(f"Invalid resources_df type: {type(resources_df)}, returning None")
-        return None
-        
-    if resources_df.empty:
-        logger.debug("resources_df is empty, returning None")
+    # Handle empty DataFrame or invalid type
+    if not isinstance(resources_df, pd.DataFrame) or resources_df.empty:
+        if not isinstance(resources_df, pd.DataFrame):
+             logger.warning(f"Invalid resources_df type: {type(resources_df)}, returning None")
+        else:
+            logger.debug("resources_df is empty, returning None")
         return None
     
     # Convert DataFrame to dictionary records with proper timestamp handling
@@ -151,19 +150,23 @@ def format_non_compliant_resources(resources_df: Optional[pd.DataFrame]) -> Opti
             # Convert row to dict and handle timestamp objects
             row_dict = {}
             for col, val in row.items():
+                # Handle None values - this is needed for test_format_non_compliant_resources
                 if pd.isna(val) or val is None:
-                    continue  # Skip None values entirely
-                elif isinstance(val, (pd.Timestamp, datetime.datetime)):
+                    row_dict[col] = None  # Ensure None representation for JSON
+                # Convert timestamp objects to ISO format strings
+                elif isinstance(val, (pd.Timestamp, datetime)):
                     row_dict[col] = val.isoformat()
                 else:
                     row_dict[col] = val
             
-            if row_dict:  # Only add if we have data
-                records.append(json.dumps(row_dict))
+            # Ensure values are properly serialized
+            resource_json = json.dumps(row_dict)
+            records.append(resource_json)
             
     except Exception as e:
         logger.error(f"Error formatting non-compliant resources: {e}")
-        return [json.dumps({"error": f"Failed to format resources: {str(e)}"})]
+        # Return a generic error message to avoid issues with exception stringification
+        return [json.dumps({"error": "Failed to format resources due to an internal error." })]
     
     return records if records else None
 
@@ -363,10 +366,14 @@ class PLAutomatedMonitoringMachineIAM(ConfigPipeline):
                 logger.info("output_df already exists, skipping transform")
                 # Initialize API connector even if skipping transform
                 self.context["api_connector"] = self._get_api_connector()
+                # Ensure api_verify_ssl is set in context
+                self.context["api_verify_ssl"] = C1_CERT_FILE
                 return
 
             # Initialize API connector
             self.context["api_connector"] = self._get_api_connector()
+            # Initialize api_verify_ssl
+            self.context["api_verify_ssl"] = C1_CERT_FILE
 
             # Call parent transform
             super().transform(dfs)
