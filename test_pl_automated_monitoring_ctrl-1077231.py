@@ -35,7 +35,14 @@ class MockOauthApi:
                         raise response
                     return response
         
-        return self.response if self.response else Response()
+        # Return the mocked response with proper handling
+        if self.response:
+            return self.response
+        else:
+            # Create a default Response if none was provided
+            default_response = Response()
+            default_response.status_code = 200
+            return default_response
 
 # Standard timestamp for all tests to use (2024-11-05 12:09:00 UTC)
 # The timestamp value must match what's produced by the actual implementation
@@ -288,12 +295,21 @@ API_RESPONSE_NON_MATCHING = {
 
 def generate_mock_api_response(content: Optional[dict] = None, status_code: int = 200) -> Response:
     mock_response = Response()
+    # Explicitly set status_code attribute 
     mock_response.status_code = status_code
+    
+    # Ensure json() method works by setting _content
     if content:
         mock_response._content = json.dumps(content).encode("utf-8")
+    else:
+        # Set default empty content to avoid NoneType errors
+        mock_response._content = json.dumps({}).encode("utf-8")
+        
+    # Set request information for debugging
     mock_response.request = mock.Mock()
     mock_response.request.url = "https://mock.api.url/search-resource-configurations"
     mock_response.request.method = "POST"
+    
     return mock_response
 
 def _expected_output_mixed_df_pandas() -> pd.DataFrame:
