@@ -28,11 +28,6 @@ stages:
         options:
           thresholds_raw: $thresholds_raw
           resource_type: AWS::EC2::Instance
-          config_key: metadataOptions.httpTokens
-          config_value: required
-          ctrl_id: CTRL-1077231
-          tier1_metric_id: 1
-          tier2_metric_id: 2
 
   load:
     monitoring_metrics:

@@ -1,18 +1,26 @@
 import json
 import time
 from datetime import datetime, timedelta
-from pathlib import Pathimport pandas as pd
-from pandas.core.api import DataFrame as DataFrameimport pipelines.pl_automated_monitoring_cloud_custodian.transform  # noqa: F401 # register custom transforms
+from pathlib import Path
+import pandas as pd
+from pandas.core.api import DataFrame as DataFrame
+import pipelines.pl_automated_monitoring_cloud_custodian.transform  # noqa: F401 # register custom transforms
 from config_pipeline import ConfigPipeline
 from connectors.api import OauthApi
 from connectors.ca_certs import C1_CERT_FILE
 from connectors.exchange.oauth_token import refresh
-from etip_env import Env# To onboard a control, add the Cloud Custodian control ID and the FUSE control ID to the below dictionary #
+from etip_env import Env
+
+# To onboard a control, add the Cloud Custodian control ID and the FUSE control ID to the below dictionary #
 dictionary_tier_2 = {
     "SC-8.AWS.43": "CTRL-1077109",
     "SC-8.AWS.42": "CTRL-1077108",
     "AC-3.AWS.80": "CTRL-1078029",
-}aws_services_tier_2 = {}columns = [
+}
+
+aws_services_tier_2 = {}
+
+columns = [
     "monitoring_metric_id",
     "control_id",
     "monitoring_metric_value",
@@ -21,12 +29,15 @@ dictionary_tier_2 = {
     "metric_value_denominator",
     "resources_info",
     "control_monitoring_utc_timestamp",
-]# Extract control number
+]
+# Extract control number
 def map_control(control_id, consolidated_controls_dictionary) -> str:
     if control_id in dictionary_tier_2:
         return dictionary_tier_2[control_id]
     elif control_id in consolidated_controls_dictionary:
-        return consolidated_controls_dictionary[control_id]def run(
+        return consolidated_controls_dictionary[control_id]
+
+def run(
     env: Env,
     is_export_test_data: bool = False,
     is_load: bool = True,
@@ -38,7 +49,9 @@ def map_control(control_id, consolidated_controls_dictionary) -> str:
         pipeline.run_test_data_export(dq_actions=dq_actions)
         if is_export_test_data
         else pipeline.run(load=is_load, dq_actions=dq_actions)
-    )class PLAmCloudCustodianPipeline(ConfigPipeline):
+    )
+
+class PLAmCloudCustodianPipeline(ConfigPipeline):
     def __init__(
         self,
         env: Env,

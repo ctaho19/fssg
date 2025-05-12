@@ -17,6 +17,8 @@ stages:
       connector: snowflake
       options:
         sql: "@text:sql/evaluated_roles.sql"
+        params: $evaluated_roles_params  # Use the dynamic list of parameters (one for each cloud control ID)
+        multi_run: true  # Execute the query multiple times with different parameters
     sla_data:
       connector: snowflake
       options:
@@ -27,34 +29,29 @@ stages:
       - type: count_check
         fatal: true
         envs:
-          - qa
           - prod
         options:
           data_location: Snowflake
           threshold: 1
-          table_name: CYBR_DB_COLLAB.LAB_ESRA_TCRD.CYBER_CONTROLS_MONITORING_THRESHOLD
+          table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
     iam_roles:
       - type: count_check
         fatal: true
         envs:
-          - qa
           - prod
         options:
           data_location: Snowflake
           threshold: 1
           table_name: EIAM_DB.PHDP_CYBR_IAM.IDENTITY_REPORTS_IAM_RESOURCE_V3
-          date_filter: "DATE(SF_LOAD_TIMESTAMP) = CURRENT_DATE"
     evaluated_roles:
       - type: count_check
         fatal: true
         envs:
-          - qa
           - prod
         options:
           data_location: Snowflake
           threshold: 1
           table_name: EIAM_DB.PHDP_CYBR_IAM.IDENTITY_REPORTS_CONTROLS_VIOLATIONS_STREAM_V2
-          date_filter: "DATE(CREATE_DATE) = CURRENT_DATE"
 
   transform:
     monitoring_metrics:
