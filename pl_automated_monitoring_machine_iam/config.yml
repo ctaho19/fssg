@@ -9,6 +9,7 @@ stages:
       connector: snowflake
       options:
         sql: "@text:sql/monitoring_thresholds.sql"
+        params: $thresholds_raw_params
     iam_roles:
       connector: snowflake
       options:

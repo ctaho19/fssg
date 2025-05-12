@@ -697,6 +697,17 @@ def test_pipeline_extract():
             assert "control_id" in param
             assert param["control_id"] == pipeline.CONTROL_CONFIGS[i]["cloud_control_id"]
         
+        # Verify thresholds_raw_params was added to context
+        assert "thresholds_raw_params" in pipe.context
+        assert isinstance(pipe.context["thresholds_raw_params"], dict)
+        assert "control_ids" in pipe.context["thresholds_raw_params"]
+        
+        # Check that the control_ids parameter contains all control IDs from CONTROL_CONFIGS
+        control_ids_param = pipe.context["thresholds_raw_params"]["control_ids"]
+        assert isinstance(control_ids_param, str)
+        for config in pipeline.CONTROL_CONFIGS:
+            assert f"'{config['ctrl_id']}'" in control_ids_param
+        
         # Verify the parent extract method was called
         mock_super_extract.assert_called_once()
 

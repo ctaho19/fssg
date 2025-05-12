@@ -229,6 +229,12 @@ class PLAutomatedMonitoringMachineIAM(ConfigPipeline):
             })
         self.context["evaluated_roles_params"] = evaluated_roles_params
         
+        # Create parameter for thresholds query with dynamic control IDs
+        ctrl_ids = [f"'{config['ctrl_id']}'" for config in CONTROL_CONFIGS]
+        self.context["thresholds_raw_params"] = {
+            "control_ids": ", ".join(ctrl_ids)
+        }
+        
         # Proceed with standard extract stages defined in config
         super().extract()
         

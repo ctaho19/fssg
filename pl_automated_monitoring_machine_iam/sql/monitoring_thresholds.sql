@@ -12,4 +12,4 @@ select
     metric_threshold_start_date
 from ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
 where METRIC_ACTIVE_STATUS = 'Y'
-  and control_id in ('CTRL-1074653', 'CTRL-1105806', 'CTRL-1077124')
+  and control_id in (%(control_ids)s)
