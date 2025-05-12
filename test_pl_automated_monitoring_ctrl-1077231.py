@@ -521,7 +521,7 @@ def test_api_connector_http_error():
     )
     
     # Set up a response with error status code
-    error_response = generate_mock_api_response(None, status_code=500)
+    error_response = generate_mock_api_response({"error": "Internal Server Error"}, status_code=500)
     mock_api.response = error_response
     
     try:
