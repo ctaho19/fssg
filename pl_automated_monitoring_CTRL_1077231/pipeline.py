@@ -120,6 +120,13 @@ def fetch_all_resources(api_connector: OauthApi, verify_ssl: Any, config_key_ful
             retry_delay=20,
         )
 
+        # Ensure response exists and has a status_code before checking
+        if response is None:
+            raise RuntimeError("API response is None")
+            
+        if not hasattr(response, 'status_code'):
+            raise RuntimeError("API response does not have status_code attribute")
+            
         if response.status_code > 299:
             err_msg = f"Error occurred while retrieving resources with status code {response.status_code}."
             raise RuntimeError(err_msg)
