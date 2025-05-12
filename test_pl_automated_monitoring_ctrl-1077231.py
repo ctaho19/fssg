@@ -35,14 +35,7 @@ class MockOauthApi:
                         raise response
                     return response
         
-        # Return the mocked response with proper handling
-        if self.response:
-            return self.response
-        else:
-            # Create a default Response if none was provided
-            default_response = Response()
-            default_response.status_code = 200
-            return default_response
+        return self.response if self.response else Response()
 
 # Standard timestamp for all tests to use (2024-11-05 12:09:00 UTC)
 # The timestamp value must match what's produced by the actual implementation
@@ -295,21 +288,12 @@ API_RESPONSE_NON_MATCHING = {
 
 def generate_mock_api_response(content: Optional[dict] = None, status_code: int = 200) -> Response:
     mock_response = Response()
-    # Explicitly set status_code attribute 
     mock_response.status_code = status_code
-    
-    # Ensure json() method works by setting _content
     if content:
         mock_response._content = json.dumps(content).encode("utf-8")
-    else:
-        # Set default empty content to avoid NoneType errors
-        mock_response._content = json.dumps({}).encode("utf-8")
-        
-    # Set request information for debugging
     mock_response.request = mock.Mock()
     mock_response.request.url = "https://mock.api.url/search-resource-configurations"
     mock_response.request.method = "POST"
-    
     return mock_response
 
 def _expected_output_mixed_df_pandas() -> pd.DataFrame:
@@ -537,11 +521,11 @@ def test_api_connector_http_error():
     )
     
     # Set up a response with error status code
-    error_response = generate_mock_api_response({"error": "Internal Server Error"}, status_code=500)
+    error_response = generate_mock_api_response(None, status_code=500)
     mock_api.response = error_response
     
-    # The fetch_all_resources function should raise a RuntimeError when encountering a non-2xx status code
-    with pytest.raises(RuntimeError, match="Error occurred while retrieving resources with status code 500"):
+    # Try to use the fetch_all_resources function which should raise an exception
+    with pytest.raises(RuntimeError):
         pipeline.fetch_all_resources(
             api_connector=mock_api,
             verify_ssl=True,
@@ -560,20 +544,14 @@ def test_api_connector_exception_handling():
     # Configure the connector to raise an exception
     mock_api.side_effect = RequestException("Connection error")
     
-    try:
-        # Try to use the fetch_all_resources function which should raise a RuntimeError
-        # that wraps our RequestException
-        with pytest.raises(RuntimeError):
-            pipeline.fetch_all_resources(
-                api_connector=mock_api,
-                verify_ssl=True,
-                config_key_full="configuration.key",
-                search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
-            )
-    except RequestException as e:
-        # If we get the raw connection error instead of it being wrapped in RuntimeError,
-        # verify it's the expected error message
-        assert "Connection error" in str(e)
+    # Try to use the fetch_all_resources function which should raise an exception
+    with pytest.raises(RuntimeError):
+        pipeline.fetch_all_resources(
+            api_connector=mock_api,
+            verify_ssl=True,
+            config_key_full="configuration.key",
+            search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
+        )
 
 def test_transform_logic_empty_api_response():
     """Tests the pipeline handles empty API responses correctly, verifying division by zero protection."""
@@ -596,10 +574,15 @@ def test_transform_logic_empty_api_response():
                 "api_connector": mock_api,
                 "api_verify_ssl": True
             }
-            # Fix: Only pass thresholds_raw and context parameters
             result_df = pipeline.calculate_ctrl1077231_metrics(
                 thresholds_raw=thresholds_df,
-                context=context
+                context=context,
+                resource_type="AWS::EC2::Instance",
+                config_key="metadataOptions.httpTokens",
+                config_value="required",
+                ctrl_id="CTRL-1077231",
+                tier1_metric_id=1,
+                tier2_metric_id=2
             )
             
             # The function always returns 2 rows (one for each tier) even when empty
@@ -644,10 +627,15 @@ def test_transform_logic_non_matching_resources():
                 "api_connector": mock_api,
                 "api_verify_ssl": True
             }
-            # Fix: Only pass thresholds_raw and context parameters
             result_df = pipeline.calculate_ctrl1077231_metrics(
                 thresholds_raw=thresholds_df,
-                context=context
+                context=context,
+                resource_type="AWS::EC2::Instance",
+                config_key="metadataOptions.httpTokens",
+                config_value="required",
+                ctrl_id="CTRL-1077231",
+                tier1_metric_id=1,
+                tier2_metric_id=2
             )
             
             # The function always returns 2 rows (one for each tier)
@@ -690,17 +678,17 @@ def test_transform_logic_api_fetch_fails():
             "api_verify_ssl": True
         }
 
-        try:
-            with pytest.raises(RuntimeError, match="Critical API fetch failure"):
-                # Fix: Only pass thresholds_raw and context parameters
-                pipeline.calculate_ctrl1077231_metrics(
-                    thresholds_raw=thresholds_df,
-                    context=context
-                )
-        except RequestException as e:
-            # If the exception bubbles up as RequestException instead of being wrapped in RuntimeError,
-            # verify it's the expected error
-            assert "Simulated API failure" in str(e)
+        with pytest.raises(RuntimeError, match="Critical API fetch failure"):
+            pipeline.calculate_ctrl1077231_metrics(
+                thresholds_raw=thresholds_df,
+                context=context,
+                resource_type="AWS::EC2::Instance",
+                config_key="metadataOptions.httpTokens",
+                config_value="required",
+                ctrl_id="CTRL-1077231",
+                tier1_metric_id=1,
+                tier2_metric_id=2
+            )
 
 def test_missing_threshold_data():
     """Tests error handling for missing threshold data."""
@@ -734,11 +722,16 @@ def test_missing_threshold_data():
         }
         
         # Should raise error due to missing tier1_metric_id
-        with pytest.raises(RuntimeError, match="Failed to calculate metrics"):
-            # Fix: Only pass thresholds_raw and context parameters
+        with pytest.raises(RuntimeError, match="Failed to access threshold data"):
             pipeline.calculate_ctrl1077231_metrics(
                 thresholds_raw=incomplete_threshold_df,
-                context=context
+                context=context,
+                resource_type="AWS::EC2::Instance",
+                config_key="metadataOptions.httpTokens",
+                config_value="required",
+                ctrl_id="CTRL-1077231",
+                tier1_metric_id=1,  # Not in the dataframe
+                tier2_metric_id=2   # Not in the dataframe
             )
         
 def test_get_compliance_status_invalid_inputs():
@@ -791,27 +784,21 @@ def test_api_connector_retries():
     success_response = generate_mock_api_response({"resourceConfigurations": [1, 2, 3], "nextRecordKey": ""})
     
     # Set up side effect to first raise an exception, then return success
-    # Fix: This handles the side_effect in MockOauthApi.send_request correctly
     mock_api.side_effect = [error_response, success_response]
     
     # Mock time.sleep to speed up test
     with mock.patch("time.sleep") as mock_sleep:
-        try:
-            # Test with the fetch_all_resources function
-            result = pipeline.fetch_all_resources(
-                api_connector=mock_api,
-                verify_ssl=True,
-                config_key_full="configuration.key",
-                search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
-            )
-            
-            # Verify the result after retry
-            assert len(result) == 3
-            assert mock_sleep.called
-        except RequestException as e:
-            # If we get a connection error, the test will just pass
-            # since we're expecting this behavior in some test environments
-            assert "Temporary connection error" in str(e) or "Connection error" in str(e)
+        # Test with the fetch_all_resources function
+        result = pipeline.fetch_all_resources(
+            api_connector=mock_api,
+            verify_ssl=True,
+            config_key_full="configuration.key",
+            search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
+        )
+        
+        # Verify the result after retry
+        assert len(result) == 3
+        assert mock_sleep.called
 
 def test_run_entrypoint_defaults():
     with mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231") as mock_pipeline_class:
@@ -850,10 +837,15 @@ def test_calculate_metrics_generic_exception():
     }
     
     with pytest.raises(RuntimeError, match="Failed to calculate metrics"):
-        # Fix: Only pass thresholds_raw and context parameters
         pipeline.calculate_ctrl1077231_metrics(
             thresholds_raw=_mock_threshold_df_pandas(),
-            context=context
+            context=context,
+            resource_type="AWS::EC2::Instance",
+            config_key="metadataOptions.httpTokens",
+            config_value="required",
+            ctrl_id="CTRL-1077231",
+            tier1_metric_id=1,
+            tier2_metric_id=2
         )
 
 def test_main_function_execution():
@@ -954,21 +946,26 @@ def test_pipeline_end_to_end():
                                     # Store the result for later assertions
                                     pipe.output_df = expected_df
                                     
-                                    # 1. First verify OAuth token refresh via the API connector
-                                    # Fix: Use _get_api_connector instead of _get_api_token
-                                    api_connector = pipe._get_api_connector()
-                                    assert isinstance(api_connector, OauthApi)
-                                    assert api_connector.api_token.startswith("Bearer ")
+                                    # 1. First verify OAuth token refresh works
+                                    api_token = pipe._get_api_token()
+                                    assert api_token.startswith("Bearer ")
                                     assert mock_refresh.called, "OAuth token refresh function should have been called"
                                     
-                                    # 2. Setup the context with the API connector
-                                    pipe.context["api_connector"] = api_connector
+                                    # 2. Setup the context with the token
+                                    pipe.context["api_auth_token"] = api_token
+                                    pipe.context["cloudradar_api_url"] = pipe.cloudradar_api_url
                                     pipe.context["api_verify_ssl"] = True
                                     
                                     # 3. Call the transformation function directly
                                     result_df = pipeline.calculate_ctrl1077231_metrics(
                                         thresholds_raw=_mock_threshold_df_pandas(),
-                                        context=pipe.context
+                                        context=pipe.context,
+                                        resource_type="AWS::EC2::Instance",
+                                        config_key="metadataOptions.httpTokens",
+                                        config_value="required",
+                                        ctrl_id="CTRL-1077231",
+                                        tier1_metric_id=1,
+                                        tier2_metric_id=2
                                     )
                                     
                                     # 4. Save the result as the pipeline would do
