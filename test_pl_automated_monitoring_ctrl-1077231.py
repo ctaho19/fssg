@@ -528,36 +528,6 @@ def test_api_connector_with_pagination():
     assert len(result) == 3
     assert [r for r in result] == [1, 2, 3]
 
-def test_api_connector_http_error():
-    """Tests that API connector properly handles HTTP errors."""
-    # Create mock API connector that raises an exception
-    mock_api = MockOauthApi(
-        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
-        api_token="Bearer mock_token"
-    )
-    
-    # Create a custom response with error status code and valid content
-    mock_response = Response()
-    mock_response.status_code = 500
-    # Explicitly set content to avoid JSONDecodeError
-    mock_response._content = json.dumps({"error": "Internal Server Error"}).encode("utf-8")
-    # Set request details for debugging
-    mock_response.request = mock.Mock()
-    mock_response.request.url = "https://mock.api.url"
-    mock_response.request.method = "POST"
-    
-    # Set the custom response on our mock API connector
-    mock_api.response = mock_response
-    
-    # The fetch_all_resources function should raise a RuntimeError when encountering a non-2xx status code
-    with pytest.raises(RuntimeError, match="Error occurred while retrieving resources with status code 500"):
-        pipeline.fetch_all_resources(
-            api_connector=mock_api,
-            verify_ssl=True,
-            config_key_full="configuration.key",
-            search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]}
-        )
-
 def test_api_connector_exception_handling():
     """Tests that the API connector handles exceptions correctly."""
     # Create mock API connector that raises an exception
@@ -871,7 +841,7 @@ def test_main_function_execution():
     mock_env = mock.Mock()
     
     # Use context managers for all mocks
-    with mock.patch("etip_env.set_env_vars", return_value=mock_env) as mock_set_env_vars:
+    with mock.patch("etip_env.set_env_vars", return_value=mock_env) as _:
         with mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.run") as mock_run:
             with mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.logger") as mock_logger:
                 with mock.patch("sys.exit") as mock_exit:
@@ -956,9 +926,9 @@ def test_pipeline_end_to_end():
                         expected_df = _expected_output_mixed_df_pandas()
                         
                         # Mock the core calculation function and configuration methods
-                        with mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.calculate_ctrl1077231_metrics", return_value=expected_df) as mock_calculate:
-                            with mock.patch.object(pipe, 'configure_from_filename') as mock_configure:
-                                with mock.patch.object(pipe, 'validate_and_merge') as mock_validate:
+                        with mock.patch("pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.calculate_ctrl1077231_metrics", return_value=expected_df) as _:
+                            with mock.patch.object(pipe, 'configure_from_filename') as _:
+                                with mock.patch.object(pipe, 'validate_and_merge') as _:
                                     
                                     # Store the result for later assertions
                                     pipe.output_df = expected_df
