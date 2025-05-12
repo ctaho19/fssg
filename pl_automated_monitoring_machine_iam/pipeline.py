@@ -99,7 +99,20 @@ def format_non_compliant_resources(resources_df: pd.DataFrame) -> Optional[List[
     if resources_df is None or resources_df.empty:
         return None
     
-    return [json.dumps(row.to_dict()) for _, row in resources_df.iterrows()]
+    # Convert DataFrame to dictionary records with proper timestamp handling
+    records = []
+    for _, row in resources_df.iterrows():
+        # Convert row to dict and handle timestamp objects
+        row_dict = {}
+        for col, val in row.items():
+            # Convert timestamp objects to ISO format strings
+            if isinstance(val, (pd.Timestamp, datetime.datetime)):
+                row_dict[col] = val.isoformat()
+            else:
+                row_dict[col] = val
+        records.append(json.dumps(row_dict))
+    
+    return records
 
 def fetch_all_resources(api_connector: OauthApi, verify_ssl: Any, config_key_full: str, search_payload: Dict, limit: Optional[int] = None) -> List[Dict]:
     """Fetch all resources using the OauthApi connector with pagination support."""
@@ -167,6 +180,9 @@ class PLAutomatedMonitoringMachineIAM(ConfigPipeline):
     def __init__(self, env: Env) -> None:
         super().__init__(env)
         self.env = env
+        # Initialize context to avoid AttributeError in tests
+        self.context = {}
+        
         # Add client properties for test compatibility
         try:
             self.client_id = env.exchange.client_id
