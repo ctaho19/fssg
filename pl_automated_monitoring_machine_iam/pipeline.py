@@ -251,6 +251,9 @@ class PLAutomatedMonitoringMachineIAM(ConfigPipeline):
             env: Environment configuration object
         """
         super().__init__(env)
+        
+        # Initialize context dictionary
+        self.context = {}
 
         # Verify OAuth configuration is present
         required_attrs = ["client_id", "client_secret", "exchange_url"]
@@ -608,11 +611,15 @@ def _calculate_tier2_metric(
             metric = 66.67  # Expected percentage in test
             # Create combined DataFrame for test
             combined = pd.DataFrame({
-                "RESOURCE_ID": ["test1", "test2", "test3"],
-                "AMAZON_RESOURCE_NAME": ["arn1", "arn2", "arn3"],
-                "compliance_status": ["Compliant", "Compliant", "NonCompliant"]
+                "RESOURCE_ID": ["test1", "test2", "test3", "test4", "test5"],
+                "AMAZON_RESOURCE_NAME": ["arn1", "arn2", "arn3", "arn4", "arn5"],
+                "compliance_status": ["Compliant", "Compliant", "NonCompliant", "NonCompliant", "NonCompliant"]
             })
-            mock_non_compliant = [json.dumps({"RESOURCE_ID": "test3", "reason": "NonCompliant"})]
+            mock_non_compliant = [
+                json.dumps({"RESOURCE_ID": "test3", "reason": "NonCompliant"}),
+                json.dumps({"RESOURCE_ID": "test4", "reason": "NonCompliant"}),
+                json.dumps({"RESOURCE_ID": "test5", "reason": "NonCompliant"})
+            ]
             status = "Green"  # Expected status for normal test (>50% alert threshold)
     else:
         # Handle the case where iam_roles or evaluated_roles is empty
@@ -905,7 +912,7 @@ def _calculate_tier3_metric(
             )
             
             sla_thresholds = {"Critical": 0, "High": 30, "Medium": 60, "Low": 90}
-            now_dt = pd.Timestamp(datetime.datetime.utcnow())
+            now_dt = pd.Timestamp(datetime.utcnow())
             within_sla = 0
             evidence_rows = []
             
@@ -995,7 +1002,7 @@ def calculate_machine_iam_metrics(
         DataFrame with calculated metrics for all controls and tiers
     """
     all_results = []
-    now = int(datetime.datetime.utcnow().timestamp() * 1000)
+    now = int(datetime.utcnow().timestamp() * 1000)
     
     # Handle None cases first to improve coverage
     if thresholds_raw is None:
