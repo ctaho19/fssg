@@ -1,7 +1,7 @@
 import json
 import logging
 import time
-from datetime import datetime
+import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -513,7 +513,7 @@ def _calculate_tier3_metric(
             )
             
             sla_thresholds = {"Critical": 0, "High": 30, "Medium": 60, "Low": 90}
-            now_dt = pd.Timestamp.utcnow()
+            now_dt = pd.Timestamp(datetime.datetime.utcnow())
             within_sla = 0
             evidence_rows = []
             
@@ -602,11 +602,16 @@ def calculate_machine_iam_metrics(
         DataFrame with calculated metrics for all controls and tiers
     """
     all_results = []
-    now = int(datetime.utcnow().timestamp() * 1000)
+    now = int(datetime.datetime.utcnow().timestamp() * 1000)
     
     # Log the current state of the thresholds dataframe
     if thresholds_raw.empty:
         logger.error("Thresholds dataframe is empty. Cannot calculate metrics without thresholds.")
+        return pd.DataFrame()
+    
+    # Check if input data is empty - return empty DataFrame if true
+    if iam_roles.empty:
+        logger.warning("IAM roles dataframe is empty. Cannot calculate metrics without IAM roles.")
         return pd.DataFrame()
     
     # Log information about the available controls and thresholds
