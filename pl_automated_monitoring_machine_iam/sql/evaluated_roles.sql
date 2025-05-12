@@ -1,5 +1,6 @@
 -- sqlfluff:dialect:snowflake
 -- sqlfluff:templater:placeholder:param_style:pyformat
+-- sqlfluff:disable:disable_progress_bar:deprecated
 select distinct
     upper(resource_name) as resource_name,
     compliance_status,

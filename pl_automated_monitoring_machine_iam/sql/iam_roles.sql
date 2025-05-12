@@ -1,5 +1,6 @@
 -- sqlfluff:dialect:snowflake
 -- sqlfluff:templater:placeholder:param_style:pyformat
+-- sqlfluff:disable:disable_progress_bar:deprecated
 SELECT DISTINCT
     RESOURCE_ID,
     UPPER(AMAZON_RESOURCE_NAME) as AMAZON_RESOURCE_NAME,

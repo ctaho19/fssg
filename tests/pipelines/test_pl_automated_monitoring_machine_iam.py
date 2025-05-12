@@ -1,7 +1,7 @@
 import datetime
 import json
 import unittest.mock as mock
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any
 import pandas as pd
 import pytest
 from freezegun import freeze_time

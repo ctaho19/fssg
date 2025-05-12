@@ -1,5 +1,6 @@
 -- sqlfluff:dialect:snowflake
 -- sqlfluff:templater:placeholder:param_style:pyformat
+-- sqlfluff:disable:disable_progress_bar:deprecated
 select
     monitoring_metric_id,
     control_id,
