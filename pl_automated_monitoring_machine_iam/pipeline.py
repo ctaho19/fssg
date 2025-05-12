@@ -304,11 +304,12 @@ class PLAutomatedMonitoringMachineIAM(ConfigPipeline):
     
     def transform(self, dfs: Optional[Dict[str, pd.DataFrame]] = None) -> None:
         """Prepares the transform stage by initializing the API connector and setting up context."""
-        api_connector = self._get_api_connector()
-        
-        # Add API connector to context for transformer functions
-        self.context["api_connector"] = api_connector
-        self.context["api_verify_ssl"] = C1_CERT_FILE
+        # Check if we already have an API connector in the context (for test_pipeline_end_to_end)
+        if "api_connector" not in self.context:
+            api_connector = self._get_api_connector()
+            # Add API connector to context for transformer functions
+            self.context["api_connector"] = api_connector
+            self.context["api_verify_ssl"] = C1_CERT_FILE
         
         # For testing: handle the case where no dfs are provided
         if dfs is None:
