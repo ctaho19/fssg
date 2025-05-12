@@ -131,28 +131,6 @@ def _mock_threshold_df_pandas() -> pd.DataFrame:
         ]
     })
 
-def _mock_invalid_threshold_df_pandas() -> pd.DataFrame:
-    return pd.DataFrame({
-        "monitoring_metric_id": [1, 2],
-        "control_id": ["CTRL-1074653", "CTRL-1074653"],
-        "monitoring_metric_tier": ["Tier 1", "Tier 2"],
-        "metric_name": ["% of machine roles evaluated", "% of machine roles compliant"],
-        "metric_description": ["Percent of machine roles that have been evaluated", "Percent of machine roles that are compliant"],
-        "warning_threshold": ["invalid", None],
-        "alerting_threshold": ["not_a_number", 50.0],
-        "load_timestamp": [
-            datetime.datetime(2024, 11, 5, 12, 9, 0, 21180),
-            datetime.datetime(2024, 11, 5, 12, 9, 0, 21180)
-        ],
-        "metric_threshold_start_date": [
-            datetime.datetime(2024, 11, 5, 12, 9, 0, 21180),
-            datetime.datetime(2024, 11, 5, 12, 9, 0, 21180)
-        ]
-    }).astype({
-        "monitoring_metric_id": int,
-        "warning_threshold": object,
-        "alerting_threshold": object
-    })
 
 def _mock_iam_roles_df_pandas() -> pd.DataFrame:
     return pd.DataFrame({

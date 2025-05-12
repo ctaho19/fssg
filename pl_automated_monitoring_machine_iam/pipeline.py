@@ -53,9 +53,6 @@ CONTROL_CONFIGS = [
     }
 ]
 
-# For backwards compatibility, maintain list of control IDs
-MACHINE_IAM_CONTROL_IDS = [config["ctrl_id"] for config in CONTROL_CONFIGS]
-
 # --- UTILITY FUNCTIONS ---
 def get_compliance_status(metric: float, alert_threshold: Any, warning_threshold: Optional[Any] = None) -> str:
     """Calculate compliance status based on metric value and thresholds.
@@ -237,12 +234,6 @@ def fetch_all_resources(api_connector: OauthApi, verify_ssl: Any, config_key_ful
 # --- PIPELINE CLASS ---
 class PLAutomatedMonitoringMachineIAM(ConfigPipeline):
     """Pipeline for monitoring machine IAM roles."""
-
-    CONTROL_CONFIGS = [
-        {"cloud_control_id": "AC-3.AWS.39.v02", "ctrl_id": "CTRL-1074653", "requires_tier3": True},
-        {"cloud_control_id": "AC-6.AWS.13.v01", "ctrl_id": "CTRL-1105806", "requires_tier3": False},
-        {"cloud_control_id": "AC-6.AWS.35.v02", "ctrl_id": "CTRL-1077124", "requires_tier3": False}
-    ]
 
     def __init__(self, env: Env) -> None:
         """Initialize the pipeline with environment configuration.
