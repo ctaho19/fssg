@@ -112,6 +112,8 @@ def run(env: Env, is_export_test_data: bool = False, is_load: bool = True, dq_ac
 - **Large Functions**: Avoid monolithic functions that are difficult to test and maintain
 - **Inconsistent Error Handling**: Standardize how errors are caught and reported
 - **Missing Type Hints**: Always include type hints for better code readability and IDE support
+- **Unused Code**: Remove unused imports, functions, and variables that create clutter
+- **Dead Code**: Eliminate code paths that are never executed or functions never called
 
 ### 2. `config.yml`
 
@@ -321,6 +323,8 @@ def test_calculate_metrics():
 - **Fixture Usage**: Create fixtures for common test data
 - **Coverage**: Aim for high test coverage, especially for business logic
 - **Edge Cases**: Test edge cases (empty data, error conditions)
+- **Utilize All Fixtures/Mocks**: Ensure all defined test fixtures and mock functions are used in tests
+- **Remove Unused Mocks**: Delete any unused mock functions instead of leaving them in the codebase
 
 ## Onboarding New Controls
 

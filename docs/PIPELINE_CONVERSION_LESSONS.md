@@ -237,6 +237,53 @@ for _, row in control_thresholds.iterrows():
     }
 ```
 
+## Code Cleanliness
+
+### Removing Unused Imports and Functions
+
+**Lesson**: Unused imports and functions create unnecessary clutter, make code harder to understand, and can lead to confusion during maintenance.
+
+The original implementation included several unused imports and functions that were either left over from previous code iterations or added in anticipation of future needs but never actually used.
+
+**Better Approach**:
+1. Regularly review code for unused imports and functions
+2. Remove or comment out code that isn't being used
+3. Document why a seemingly unused function exists if it's needed for a specific reason
+4. Use linting tools to automatically identify unused code
+
+```python
+# Before: Unused imports
+import json
+import pandas as pd
+import numpy as np  # Unused import
+import datetime
+from typing import Dict, List, Optional, Union, Any, Tuple  # Some types unused
+
+# After: Clean imports
+import json
+import pandas as pd
+import datetime
+from typing import Dict, List, Optional, Any  # Only types actually used
+```
+
+When working with test files, it's particularly important to ensure that all mock functions are properly utilized in test cases. In the `test_pl_automated_monitoring_CTRL_1077231.py` file, several mock functions were defined but never used:
+
+```python
+# These functions were defined but not used in any tests
+def _mock_invalid_threshold_df_pandas() -> pd.DataFrame:
+    # ...
+
+def _expected_output_empty_df_pandas() -> pd.DataFrame:
+    # ...
+
+def _expected_output_yellow_df_pandas() -> pd.DataFrame:
+    # ...
+```
+
+The correct approach is to either:
+1. Add test cases that utilize these mock functions
+2. Remove the unused mock functions entirely
+
 ## Summary of Key Improvements
 
 1. **Configuration Over Code**: Moved control configurations from hardcoded values to the config file
@@ -246,5 +293,6 @@ for _, row in control_thresholds.iterrows():
 5. **Appropriate Logging**: Reduced excessive debugging logs while maintaining important information
 6. **Dynamic Data Processing**: Extracted control information dynamically from threshold data
 7. **Code Organization**: Followed consistent patterns for imports, utility functions, and class structure
+8. **Code Cleanliness**: Removed unused imports and functions to reduce clutter and improve readability
 
 These improvements resulted in a more maintainable, flexible, and robust pipeline that follows best practices and aligns with the patterns established in reference pipelines.
