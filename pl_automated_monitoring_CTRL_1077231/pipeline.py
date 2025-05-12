@@ -37,7 +37,30 @@ class PLAutomatedMonitoringCtrl1077231(ConfigPipeline):
     ) -> None:
         super().__init__(env)
         self.env = env
+        # Add client properties for test compatibility
+        self.client_id = env.exchange.client_id
+        self.client_secret = env.exchange.client_secret
+        self.exchange_url = env.exchange.exchange_url
         self.cloudradar_api_url = "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
+
+    def _get_api_token(self) -> str:
+        """Get an API token for authentication.
+        
+        This method is maintained for test compatibility.
+        
+        Returns:
+            str: Bearer token for API authentication
+        """
+        try:
+            api_token = refresh(
+                client_id=self.env.exchange.client_id,
+                client_secret=self.env.exchange.client_secret,
+                exchange_url=self.env.exchange.exchange_url,
+            )
+            return f"Bearer {api_token}"
+        except Exception as e:
+            logger.error(f"API token refresh failed: {e}")
+            raise RuntimeError("API token refresh failed") from e
 
     def _get_api_connector(self) -> OauthApi:
         """Get an OauthApi instance for making API requests."""
