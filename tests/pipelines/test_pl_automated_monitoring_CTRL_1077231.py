@@ -76,14 +76,14 @@ def get_fixed_timestamp(as_int: bool = True) -> Union[int, pd.Timestamp]:
 
 # Avro schema fields for output DataFrame
 AVRO_SCHEMA_FIELDS = [
-    "date",
+    "control_monitoring_utc_timestamp",
     "control_id",
     "monitoring_metric_id",
     "monitoring_metric_value",
-    "compliance_status",
-    "numerator",
-    "denominator",
-    "non_compliant_resources",
+    "monitoring_metric_status",
+    "metric_value_numerator",
+    "metric_value_denominator",
+    "resources_info",
 ]
 
 
@@ -395,8 +395,8 @@ def generate_mock_api_response(
 
 def _expected_output_mixed_df_pandas() -> pd.DataFrame:
     """Creates the expected DataFrame output for the mixed API response scenario."""
-    # Get fixed timestamp from utility function
-    now = get_fixed_timestamp(as_int=True)
+    # Use datetime.now() to match pipeline behavior
+    now = datetime.datetime(2024, 11, 5, 12, 9, 0)
     t1_non_compliant_json = [
         json.dumps(
             {
@@ -429,33 +429,29 @@ def _expected_output_mixed_df_pandas() -> pd.DataFrame:
     ]
     df = pd.DataFrame(data, columns=AVRO_SCHEMA_FIELDS)
     # Make sure data types match pipeline output
-    df["date"] = df["date"].astype("int64")
-    df["numerator"] = df["numerator"].astype("int64")
-    df["denominator"] = df["denominator"].astype("int64")
+    df["metric_value_numerator"] = df["metric_value_numerator"].astype("int64")
+    df["metric_value_denominator"] = df["metric_value_denominator"].astype("int64")
     return df
 
 
 def _expected_output_empty_df_pandas() -> pd.DataFrame:
     """Creates the expected DataFrame output for the empty API response scenario."""
     # The pipeline returns a 2-row DataFrame with default values when no data is found
-    # Get fixed timestamp from utility function
-    now = get_fixed_timestamp(as_int=True)
+    now = datetime.datetime(2024, 11, 5, 12, 9, 0)
     data = [
         [now, "CTRL-1077231", 1, 0.0, "Red", 0, 0, None],
         [now, "CTRL-1077231", 2, 0.0, "Red", 0, 0, None],
     ]
     df = pd.DataFrame(data, columns=AVRO_SCHEMA_FIELDS)
     # Make sure data types match pipeline output
-    df["date"] = df["date"].astype("int64")
-    df["numerator"] = df["numerator"].astype("int64")
-    df["denominator"] = df["denominator"].astype("int64")
+    df["metric_value_numerator"] = df["metric_value_numerator"].astype("int64")
+    df["metric_value_denominator"] = df["metric_value_denominator"].astype("int64")
     return df
 
 
 def _expected_output_yellow_df_pandas() -> pd.DataFrame:
     """Creates the expected DataFrame output for the yellow status scenario."""
-    # Get fixed timestamp from utility function
-    now = get_fixed_timestamp(as_int=True)
+    now = datetime.datetime(2024, 11, 5, 12, 9, 0)
     t2_non_compliant_json = [
         json.dumps(
             {
@@ -475,16 +471,14 @@ def _expected_output_yellow_df_pandas() -> pd.DataFrame:
     ]
     df = pd.DataFrame(data, columns=AVRO_SCHEMA_FIELDS)
     # Make sure data types match pipeline output
-    df["date"] = df["date"].astype("int64")
-    df["numerator"] = df["numerator"].astype("int64")
-    df["denominator"] = df["denominator"].astype("int64")
+    df["metric_value_numerator"] = df["metric_value_numerator"].astype("int64")
+    df["metric_value_denominator"] = df["metric_value_denominator"].astype("int64")
     return df
 
 
 def _expected_output_mixed_df_invalid_pandas() -> pd.DataFrame:
     """Creates the expected DataFrame output for the mixed API response with invalid thresholds scenario."""
-    # Get fixed timestamp from utility function
-    now = get_fixed_timestamp(as_int=True)
+    now = datetime.datetime(2024, 11, 5, 12, 9, 0)
     t1_non_compliant_json = [
         json.dumps(
             {
@@ -517,9 +511,8 @@ def _expected_output_mixed_df_invalid_pandas() -> pd.DataFrame:
     ]
     df = pd.DataFrame(data, columns=AVRO_SCHEMA_FIELDS)
     # Make sure data types match pipeline output
-    df["date"] = df["date"].astype("int64")
-    df["numerator"] = df["numerator"].astype("int64")
-    df["denominator"] = df["denominator"].astype("int64")
+    df["metric_value_numerator"] = df["metric_value_numerator"].astype("int64")
+    df["metric_value_denominator"] = df["metric_value_denominator"].astype("int64")
     return df
 
 
@@ -530,7 +523,7 @@ def test_pipeline_init_success():
             self,
             client_id="etip-client-id",
             client_secret="etip-client-secret",
-            exchange_url="https://api.cloud.capitalone.com/exchange",
+            exchange_url="api.cloud.capitalone.com/exchange",
         ):
             self.client_id = client_id
             self.client_secret = client_secret
@@ -552,7 +545,7 @@ def test_pipeline_init_success():
     pipe = pipeline.PLAutomatedMonitoringCtrl1077231(env)
     assert pipe.client_id == "etip-client-id"
     assert pipe.client_secret == "etip-client-secret"
-    assert pipe.exchange_url == "https://api.cloud.capitalone.com/exchange"
+    assert pipe.exchange_url == "api.cloud.capitalone.com/exchange"
 
 
 def test_get_api_token_success():
@@ -567,7 +560,7 @@ def test_get_api_token_success():
                 self,
                 client_id="etip-client-id",
                 client_secret="etip-client-secret",
-                exchange_url="https://api.cloud.capitalone.com/exchange",
+                exchange_url="api.cloud.capitalone.com/exchange",
             ):
                 self.client_id = client_id
                 self.client_secret = client_secret
@@ -581,7 +574,7 @@ def test_get_api_token_success():
         mock_refresh.assert_called_once_with(
             client_id="etip-client-id",
             client_secret="etip-client-secret",
-            exchange_url="https://api.cloud.capitalone.com/exchange",
+            exchange_url="api.cloud.capitalone.com/exchange",
         )
 
 
@@ -597,7 +590,7 @@ def test_get_api_token_failure():
                 self,
                 client_id="etip-client-id",
                 client_secret="etip-client-secret",
-                exchange_url="https://api.cloud.capitalone.com/exchange",
+                exchange_url="api.cloud.capitalone.com/exchange",
             ):
                 self.client_id = client_id
                 self.client_secret = client_secret
@@ -735,22 +728,21 @@ def test_transform_logic_empty_api_response():
             assert len(result_df) == 2
 
             # The values should indicate zero compliance
-            assert result_df.iloc[0]["compliance_status"] == "Red"
-            assert result_df.iloc[1]["compliance_status"] == "Red"
+            assert result_df.iloc[0]["monitoring_metric_status"] == "Red"
+            assert result_df.iloc[1]["monitoring_metric_status"] == "Red"
             assert result_df.iloc[0]["monitoring_metric_value"] == 0.0
             assert result_df.iloc[1]["monitoring_metric_value"] == 0.0
-            assert result_df.iloc[0]["numerator"] == 0
-            assert result_df.iloc[1]["numerator"] == 0
+            assert result_df.iloc[0]["metric_value_numerator"] == 0
+            assert result_df.iloc[1]["metric_value_numerator"] == 0
 
             # An empty API response means zero resources, so denominator for tier1 should be 0
-            assert result_df.iloc[0]["denominator"] == 0
+            assert result_df.iloc[0]["metric_value_denominator"] == 0
             # Since tier1_numerator is 0, tier2's denominator should also be 0 (division by zero protection)
-            assert result_df.iloc[1]["denominator"] == 0
+            assert result_df.iloc[1]["metric_value_denominator"] == 0
 
             # Also check the data types
-            assert result_df["date"].dtype == "int64"
-            assert result_df["numerator"].dtype == "int64"
-            assert result_df["denominator"].dtype == "int64"
+            assert result_df["metric_value_numerator"].dtype == "int64"
+            assert result_df["metric_value_denominator"].dtype == "int64"
 
 
 def test_transform_logic_non_matching_resources():
@@ -782,22 +774,22 @@ def test_transform_logic_non_matching_resources():
             assert len(result_df) == 2
 
             # Total resources should be 2, but tier1 numerator should be 0 since none match
-            assert result_df.iloc[0]["denominator"] == 2
-            assert result_df.iloc[0]["numerator"] == 0
+            assert result_df.iloc[0]["metric_value_denominator"] == 2
+            assert result_df.iloc[0]["metric_value_numerator"] == 0
             assert result_df.iloc[0]["monitoring_metric_value"] == 0.0
-            assert result_df.iloc[0]["compliance_status"] == "Red"
+            assert result_df.iloc[0]["monitoring_metric_status"] == "Red"
 
             # For tier 2, since tier1_numerator is 0, division by zero protection should kick in
-            assert result_df.iloc[1]["numerator"] == 0
-            assert result_df.iloc[1]["denominator"] == 0
+            assert result_df.iloc[1]["metric_value_numerator"] == 0
+            assert result_df.iloc[1]["metric_value_denominator"] == 0
             assert result_df.iloc[1]["monitoring_metric_value"] == 0.0
-            assert result_df.iloc[1]["compliance_status"] == "Red"
+            assert result_df.iloc[1]["monitoring_metric_status"] == "Red"
 
             # Check non-compliant resources for tier 1 - all resources should be listed as non-compliant
-            assert len(result_df.iloc[0]["non_compliant_resources"]) == 2
+            assert len(result_df.iloc[0]["resources_info"]) == 2
 
-            # Since tier1_numerator is 0, tier2 should have None for non_compliant_resources
-            assert result_df.iloc[1]["non_compliant_resources"] is None
+            # Since tier1_numerator is 0, tier2 should have None for resources_info
+            assert result_df.iloc[1]["resources_info"] is None
 
 
 def test_transform_logic_api_fetch_fails():
@@ -969,7 +961,7 @@ def test_run_entrypoint_defaults():
         env = set_env_vars("qa")
         pipeline.run(env=env)
         mock_pipeline_class.assert_called_once_with(env)
-        mock_pipeline_instance.run.assert_called_once()
+        mock_pipeline_instance.run.assert_called_once_with(load=True, dq_actions=True)
 
 
 def test_run_entrypoint_no_load_no_dq():
@@ -1104,7 +1096,7 @@ def test_pipeline_end_to_end():
                                 self.client_id = "etip-client-id"
                                 self.client_secret = "etip-client-secret"
                                 self.exchange_url = (
-                                    "https://api.cloud.capitalone.com/exchange"
+                                    "api.cloud.capitalone.com/exchange"
                                 )
 
                         # Initialize the environment
@@ -1174,17 +1166,17 @@ def test_pipeline_end_to_end():
                                         result_df.iloc[1]["monitoring_metric_id"] == 2
                                     ), "Second row should be metric ID 2 (Tier 2)"
 
-                                    # Verify the timestamp matches our frozen time
+                                    # Verify the timestamp is a datetime object
                                     assert (
-                                        result_df.iloc[0]["date"] == FIXED_TIMESTAMP_MS
-                                    ), "Timestamp should match our frozen time"
+                                        isinstance(result_df.iloc[0]["control_monitoring_utc_timestamp"], datetime.datetime)
+                                    ), "Timestamp should be a datetime object"
 
                                     # Check core calculations - Tier 1 (4 out of 5 resources have a value)
                                     assert (
-                                        result_df.iloc[0]["numerator"] == 4
+                                        result_df.iloc[0]["metric_value_numerator"] == 4
                                     ), "Tier 1 numerator should be 4"
                                     assert (
-                                        result_df.iloc[0]["denominator"] == 5
+                                        result_df.iloc[0]["metric_value_denominator"] == 5
                                     ), "Tier 1 denominator should be 5"
                                     assert (
                                         result_df.iloc[0]["monitoring_metric_value"]
@@ -1193,10 +1185,10 @@ def test_pipeline_end_to_end():
 
                                     # Check core calculations - Tier 2 (3 out of 4 resources with value have 'required')
                                     assert (
-                                        result_df.iloc[1]["numerator"] == 3
+                                        result_df.iloc[1]["metric_value_numerator"] == 3
                                     ), "Tier 2 numerator should be 3"
                                     assert (
-                                        result_df.iloc[1]["denominator"] == 4
+                                        result_df.iloc[1]["metric_value_denominator"] == 4
                                     ), "Tier 2 denominator should be 4"
                                     assert (
                                         result_df.iloc[1]["monitoring_metric_value"]
@@ -1205,31 +1197,31 @@ def test_pipeline_end_to_end():
 
                                     # Check compliance status against thresholds
                                     assert (
-                                        result_df.iloc[0]["compliance_status"] == "Red"
+                                        result_df.iloc[0]["monitoring_metric_status"] == "Red"
                                     ), "Tier 1 status should be Red (80% < 95%)"
                                     assert (
-                                        result_df.iloc[1]["compliance_status"]
+                                        result_df.iloc[1]["monitoring_metric_status"]
                                         == "Green"
                                     ), "Tier 2 status should be Green (75% >= 50%)"
 
                                     # Check non-compliant resources lists are properly populated
                                     assert (
-                                        result_df.iloc[0]["non_compliant_resources"]
+                                        result_df.iloc[0]["resources_info"]
                                         is not None
                                     ), "Tier 1 should have non-compliant resources"
                                     assert (
                                         len(
-                                            result_df.iloc[0]["non_compliant_resources"]
+                                            result_df.iloc[0]["resources_info"]
                                         )
                                         == 1
                                     ), "Tier 1 should have 1 non-compliant resource"
                                     assert (
-                                        result_df.iloc[1]["non_compliant_resources"]
+                                        result_df.iloc[1]["resources_info"]
                                         is not None
                                     ), "Tier 2 should have non-compliant resources"
                                     assert (
                                         len(
-                                            result_df.iloc[1]["non_compliant_resources"]
+                                            result_df.iloc[1]["resources_info"]
                                         )
                                         == 1
                                     ), "Tier 2 should have 1 non-compliant resource"
@@ -1258,22 +1250,14 @@ def test_transform_logic_with_invalid_thresholds():
             thresholds_df = _mock_invalid_threshold_df_pandas()
             context = {"api_connector": mock_api, "api_verify_ssl": True}
             
-            # The expected output for invalid thresholds should be similar to _expected_output_mixed_df_invalid_pandas
-            expected_df = _expected_output_mixed_df_invalid_pandas()
+            # Call the function directly without mocking it
+            result_df = pipeline.calculate_ctrl1077231_metrics(
+                thresholds_raw=thresholds_df, context=context
+            )
             
-            # Mock calculate_ctrl1077231_metrics to return the expected output
-            with mock.patch(
-                "pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.calculate_ctrl1077231_metrics",
-                return_value=expected_df,
-            ):
-                # Call the function directly
-                result_df = pipeline.calculate_ctrl1077231_metrics(
-                    thresholds_raw=thresholds_df, context=context
-                )
-                
-                # Verify both tiers have Red status due to invalid thresholds
-                assert result_df.iloc[0]["compliance_status"] == "Red"
-                assert result_df.iloc[1]["compliance_status"] == "Red"
+            # Verify both tiers have Red status due to invalid thresholds
+            assert result_df.iloc[0]["monitoring_metric_status"] == "Red"
+            assert result_df.iloc[1]["monitoring_metric_status"] == "Red"
 
 
 def test_transform_logic_with_yellow_threshold():
@@ -1298,22 +1282,14 @@ def test_transform_logic_with_yellow_threshold():
             thresholds_df = _mock_threshold_df_pandas()
             context = {"api_connector": mock_api, "api_verify_ssl": True}
             
-            # The expected output should match _expected_output_yellow_df_pandas
-            expected_df = _expected_output_yellow_df_pandas()
+            # Call the function directly without mocking it
+            result_df = pipeline.calculate_ctrl1077231_metrics(
+                thresholds_raw=thresholds_df, context=context
+            )
             
-            # Mock calculate_ctrl1077231_metrics to return the expected output
-            with mock.patch(
-                "pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.calculate_ctrl1077231_metrics",
-                return_value=expected_df,
-            ):
-                # Call the function directly
-                result_df = pipeline.calculate_ctrl1077231_metrics(
-                    thresholds_raw=thresholds_df, context=context
-                )
-                
-                # Verify Tier 1 is Green and Tier 2 is Yellow
-                assert result_df.iloc[0]["compliance_status"] == "Green"
-                assert result_df.iloc[1]["compliance_status"] == "Yellow"
+            # Verify Tier 1 is Green and Tier 2 is Yellow
+            assert result_df.iloc[0]["monitoring_metric_status"] == "Green"
+            assert result_df.iloc[1]["monitoring_metric_status"] == "Yellow"
 
 
 def test_transform_logic_with_empty_data():
@@ -1338,25 +1314,177 @@ def test_transform_logic_with_empty_data():
             thresholds_df = _mock_threshold_df_pandas()
             context = {"api_connector": mock_api, "api_verify_ssl": True}
             
-            # The expected output should match _expected_output_empty_df_pandas
-            expected_df = _expected_output_empty_df_pandas()
+            # Call the function directly without mocking it
+            result_df = pipeline.calculate_ctrl1077231_metrics(
+                thresholds_raw=thresholds_df, context=context
+            )
             
-            # Mock calculate_ctrl1077231_metrics to return the expected output
-            with mock.patch(
-                "pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.calculate_ctrl1077231_metrics",
-                return_value=expected_df,
-            ):
-                # Call the function directly
-                result_df = pipeline.calculate_ctrl1077231_metrics(
-                    thresholds_raw=thresholds_df, context=context
-                )
-                
-                # Verify both tiers have Red status due to empty data
-                assert result_df.iloc[0]["compliance_status"] == "Red"
-                assert result_df.iloc[1]["compliance_status"] == "Red"
-                assert result_df.iloc[0]["monitoring_metric_value"] == 0.0
-                assert result_df.iloc[1]["monitoring_metric_value"] == 0.0
-                assert result_df.iloc[0]["numerator"] == 0
-                assert result_df.iloc[1]["numerator"] == 0
-                assert result_df.iloc[0]["denominator"] == 0
-                assert result_df.iloc[1]["denominator"] == 0
+            # Verify both tiers have Red status due to empty data
+            assert result_df.iloc[0]["monitoring_metric_status"] == "Red"
+            assert result_df.iloc[1]["monitoring_metric_status"] == "Red"
+            assert result_df.iloc[0]["monitoring_metric_value"] == 0.0
+            assert result_df.iloc[1]["monitoring_metric_value"] == 0.0
+            assert result_df.iloc[0]["metric_value_numerator"] == 0
+            assert result_df.iloc[1]["metric_value_numerator"] == 0
+            assert result_df.iloc[0]["metric_value_denominator"] == 0
+            assert result_df.iloc[1]["metric_value_denominator"] == 0
+
+
+def test_api_response_error_codes():
+    """Tests handling of various API error response codes."""
+    # Test 404 error
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token",
+    )
+    error_response = generate_mock_api_response({"error": "Not found"}, status_code=404)
+    mock_api.response = error_response
+
+    with pytest.raises(RuntimeError, match="Error occurred while retrieving resources with status code 404"):
+        pipeline.fetch_all_resources(
+            api_connector=mock_api,
+            verify_ssl=True,
+            config_key_full="configuration.key",
+            search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]},
+        )
+
+
+def test_api_response_malformed_json():
+    """Tests handling of malformed JSON responses."""
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token",
+    )
+    
+    # Create a response with malformed JSON
+    def mock_send_request(url, request_type, request_kwargs):
+        response = Response()
+        response.status_code = 200
+        response._content = b"invalid json{"
+        return response
+    
+    mock_api.side_effect = mock_send_request
+
+    with pytest.raises(Exception):  # Should raise JSON decode error
+        pipeline.fetch_all_resources(
+            api_connector=mock_api,
+            verify_ssl=True,
+            config_key_full="configuration.key",
+            search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]},
+        )
+
+
+def test_api_response_missing_fields():
+    """Tests handling of API responses missing expected fields."""
+    mock_api_response = generate_mock_api_response({
+        "resourceConfigurations": [
+            {
+                "resourceId": "i-incomplete",
+                # Missing most required fields
+                "configurationList": []
+            }
+        ],
+        "nextRecordKey": ""
+    })
+    mock_api = MockOauthApi(
+        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
+        api_token="Bearer mock_token",
+    )
+    mock_api.response = mock_api_response
+
+    with mock.patch(
+        "pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231._get_api_connector"
+    ) as mock_get_connector:
+        mock_get_connector.return_value = mock_api
+
+        with freeze_time(FIXED_TIMESTAMP):
+            thresholds_df = _mock_threshold_df_pandas()
+            context = {"api_connector": mock_api, "api_verify_ssl": True}
+            
+            # Should handle missing fields gracefully
+            result_df = pipeline.calculate_ctrl1077231_metrics(
+                thresholds_raw=thresholds_df, context=context
+            )
+            
+            # Should still return valid DataFrame with default values
+            assert len(result_df) == 2
+            assert result_df.iloc[0]["monitoring_metric_status"] == "Red"
+            assert result_df.iloc[1]["monitoring_metric_status"] == "Red"
+
+
+def test_filter_resources_edge_cases():
+    """Tests edge cases in the _filter_resources function."""
+    # Test with empty resources
+    tier1_num, tier2_num, tier1_non, tier2_non = pipeline._filter_resources([], "key", "value")
+    assert tier1_num == 0
+    assert tier2_num == 0
+    assert tier1_non == []
+    assert tier2_non == []
+    
+    # Test with resources having None values
+    resources_with_none = [
+        {
+            "resourceId": "i-none",
+            "configurationList": [
+                {
+                    "configurationName": "configuration.key",
+                    "configurationValue": None
+                }
+            ]
+        }
+    ]
+    tier1_num, tier2_num, tier1_non, tier2_non = pipeline._filter_resources(
+        resources_with_none, "key", "value"
+    )
+    assert tier1_num == 0
+    assert tier2_num == 0
+    assert len(tier1_non) == 1
+    assert tier1_non[0]["configuration.key"] == "MISSING"
+
+
+def test_get_compliance_status_edge_cases():
+    """Tests additional edge cases for compliance status calculation."""
+    # Test with exactly threshold value
+    status = pipeline.get_compliance_status(0.95, 95.0)
+    assert status == "Green"
+    
+    # Test with exactly warning threshold value
+    status = pipeline.get_compliance_status(0.75, 95.0, 75.0)
+    assert status == "Yellow"
+    
+    # Test with None warning threshold
+    status = pipeline.get_compliance_status(0.80, 95.0, None)
+    assert status == "Red"
+    
+    # Test with very small metric values
+    status = pipeline.get_compliance_status(0.001, 95.0, 75.0)
+    assert status == "Red"
+
+
+def test_pipeline_transform_method():
+    """Tests the pipeline's transform method directly."""
+    class MockExchangeConfig:
+        def __init__(self):
+            self.client_id = "test-client-id"
+            self.client_secret = "test-client-secret"
+            self.exchange_url = "api.cloud.capitalone.com/exchange"
+
+    env = set_env_vars("qa")
+    env.exchange = MockExchangeConfig()
+    
+    pipe = pipeline.PLAutomatedMonitoringCtrl1077231(env)
+    pipe.context = {}  # Initialize context
+    
+    with mock.patch(
+        "pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.refresh"
+    ) as mock_refresh:
+        mock_refresh.return_value = "mock_token"
+        
+        # Mock the super().transform() call
+        with mock.patch("config_pipeline.ConfigPipeline.transform"):
+            pipe.transform()
+            
+            # Verify API connector was added to context
+            assert "api_connector" in pipe.context
+            assert "api_verify_ssl" in pipe.context
+            assert isinstance(pipe.context["api_connector"], OauthApi)

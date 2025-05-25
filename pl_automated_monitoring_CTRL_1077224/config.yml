@@ -10,6 +10,12 @@ stages:
       options:
         sql: "@text:sql/monitoring_thresholds.sql"
   
+  transform:
+    kms_metrics_df:
+      function: calculate_ctrl1077224_metrics
+      args:
+        - threshold_df
+  
   ingress_validation:
     threshold_df:
       - type: count_check
@@ -31,7 +37,7 @@ stages:
           dataset_id: '3200d09e-69a8-49f1-9d61-fd164817364c'
           attribute_map: {}
     
-    kms_key_rotation_df:
+    kms_metrics_df:
       - type: count_check
         fatal: true
         envs:
@@ -43,7 +49,7 @@ stages:
           table_name: KMS_KEY_ROTATION
   
   load:
-    kms_key_rotation_df:
+    kms_metrics_df:
       - connector: onestream
         options:
           table_name: etip_controls_monitoring_metrics

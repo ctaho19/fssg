@@ -1,0 +1,65 @@
+pipeline:
+name: pl_automated_monitoring_CTRL_1077231
+use_test_data_on_nonprod: false
+dq_strict_mode: false
+
+environments:
+prod:
+extract:
+thresholds_raw:
+connector: snowflake
+options:
+sql: "@text:sql/monitoring_thresholds.sql"
+load:
+monitoring_metrics:
+- connector: onestream
+options:
+table_name: etip_controls_monitoring_metrics
+file_type: AVRO
+avro_schema: "@json:avro_schema.json"
+business_application: BAENTERPRISETECHINSIGHTS
+
+qa: &nonprod_config
+extract:
+thresholds_raw:
+connector: snowflake
+options:
+sql: "@text:sql/monitoring_thresholds_qa.sql"
+load:
+monitoring_metrics:
+- connector: onestream
+options:
+table_name: fact_controls_monitoring_metrics_daily_v4
+file_type: AVRO
+avro_schema: "@json:avro_schema_qa.json"
+business_application: BAENTERPRISETECHINSIGHTS
+
+local: *nonprod_config
+
+stages:
+extract:
+thresholds_raw:
+
+ingress_validation:
+thresholds_raw:
+- type: count_check
+fatal: true
+envs:
+- prod
+options:
+data_location: Snowflake
+threshold: 1
+table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
+
+transform: {}
+
+load: {}
+
+prepare_test_data:
+thresholds_raw:
+- function: head
+options:
+n: 500000
+
+export_test_data:
+thresholds_raw:

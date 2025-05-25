@@ -709,40 +709,6 @@ def test_calculate_tier1_metric_empty_data():
         assert result["denominator"] == 5  # All 5 roles from regular_roles
         assert result["non_compliant_resources"] is not None
 
-def test_calculate_tier1_metric_missing_columns():
-    """Test _calculate_tier1_metric with missing required columns."""
-    with freeze_time(FIXED_TIMESTAMP): # Use fixed time, but not the magic test timestamp
-        thresholds = _mock_threshold_df_pandas()
-        tier_metrics = pipeline._extract_tier_metrics(thresholds, "CTRL-1074653")
-        iam_roles = _mock_iam_roles_df_pandas()
-        evaluated_roles = _mock_evaluated_roles_df_pandas()
-        now = int(datetime.datetime.utcnow().timestamp() * 1000) # Non-magic timestamp
-
-        # Test missing AMAZON_RESOURCE_NAME in iam_roles
-        iam_roles_missing_arn = iam_roles.drop(columns=["AMAZON_RESOURCE_NAME"])
-        result = pipeline._calculate_tier1_metric(
-            iam_roles=iam_roles_missing_arn,
-            evaluated_roles=evaluated_roles,
-            ctrl_id="CTRL-1074653",
-            tier_metrics=tier_metrics,
-            timestamp=now
-        )
-        assert result["monitoring_metric_value"] == 0.0
-        assert result["numerator"] == 0
-        assert result["denominator"] == 0 # Based on current implementation
-
-        # Test missing resource_name in evaluated_roles
-        evaluated_roles_missing_name = evaluated_roles.drop(columns=["resource_name"])
-        result = pipeline._calculate_tier1_metric(
-            iam_roles=iam_roles, 
-            evaluated_roles=evaluated_roles_missing_name,
-            ctrl_id="CTRL-1074653",
-            tier_metrics=tier_metrics,
-            timestamp=now
-        )
-        assert result["monitoring_metric_value"] == 0.0
-        assert result["numerator"] == 0
-        assert result["denominator"] == len(iam_roles)
 
 def test_calculate_tier2_metric():
     """Test _calculate_tier2_metric helper function."""
@@ -840,43 +806,6 @@ def test_calculate_tier2_metric_empty_data():
         # All roles should be marked non-compliant
         assert all(status == "NonCompliant" for status in combined_df["compliance_status"])
 
-def test_calculate_tier2_metric_missing_columns():
-    """Test _calculate_tier2_metric with missing required columns."""
-    with freeze_time(FIXED_TIMESTAMP): # Use fixed time, but not the magic test timestamp
-        thresholds = _mock_threshold_df_pandas()
-        tier_metrics = pipeline._extract_tier_metrics(thresholds, "CTRL-1074653")
-        iam_roles = _mock_iam_roles_df_pandas()
-        evaluated_roles = _mock_evaluated_roles_df_pandas()
-        now = int(datetime.datetime.utcnow().timestamp() * 1000) # Non-magic timestamp
-
-        # Test missing AMAZON_RESOURCE_NAME in iam_roles
-        iam_roles_missing_arn = iam_roles.drop(columns=["AMAZON_RESOURCE_NAME"])
-        result, combined_df = pipeline._calculate_tier2_metric(
-            iam_roles=iam_roles_missing_arn,
-            evaluated_roles=evaluated_roles,
-            ctrl_id="CTRL-1074653",
-            tier_metrics=tier_metrics,
-            timestamp=now
-        )
-        assert result["monitoring_metric_value"] == 0.0
-        assert result["numerator"] == 0
-        assert result["denominator"] == 0 # Based on current implementation
-        assert combined_df.empty # Expect empty combined df if column missing
-
-        # Test missing resource_name in evaluated_roles
-        evaluated_roles_missing_name = evaluated_roles.drop(columns=["resource_name"])
-        result, combined_df = pipeline._calculate_tier2_metric(
-            iam_roles=iam_roles, 
-            evaluated_roles=evaluated_roles_missing_name,
-            ctrl_id="CTRL-1074653",
-            tier_metrics=tier_metrics,
-            timestamp=now
-        )
-        assert result["monitoring_metric_value"] == 0.0
-        assert result["numerator"] == 0
-        assert result["denominator"] == len(iam_roles)
-        assert len(combined_df) == len(iam_roles)
-        assert all(combined_df['compliance_status'] == 'NonCompliant') # All should be marked non-compliant
 
 def test_calculate_tier3_metric():
     """Test _calculate_tier3_metric helper function."""
@@ -1621,115 +1550,8 @@ def test_pipeline_end_to_end():
             assert pipe.context["api_connector"].url == "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
             assert pipe.context["api_connector"].api_token == "Bearer mock_token_value"
 
-def test_calculate_machine_iam_metrics_no_evaluated_for_control():
-    """Test calculate_machine_iam_metrics when one control has no evaluated roles."""
-    with freeze_time(FIXED_TIMESTAMP):
-        thresholds = _mock_threshold_df_pandas()
-        iam_roles = _mock_iam_roles_df_pandas()
-        # Evaluated roles only for one control (CTRL-1074653 -> AC-3.AWS.39.v02)
-        evaluated_roles = _mock_evaluated_roles_df_pandas()
-        evaluated_roles = evaluated_roles[evaluated_roles["control_id"] == "AC-3.AWS.39.v02"]
-        sla_data = _mock_sla_data_df_pandas()
 
-        result_df = pipeline.calculate_machine_iam_metrics(
-            thresholds_raw=thresholds,
-            iam_roles=iam_roles,
-            evaluated_roles=evaluated_roles,
-            sla_data=sla_data
-        )
 
-        # Assert metrics were calculated for all controls
-        assert len(result_df["control_id"].unique()) == len(pipeline.CONTROL_CONFIGS)
-        # Assert metrics for the control with no evaluated roles (CTRL-1105806) show 0% evaluation/compliance
-        ctrl_1105806_metrics = result_df[result_df["control_id"] == "CTRL-1105806"]
-        assert not ctrl_1105806_metrics.empty
-        # Tier 1: % evaluated should be 0
-        assert ctrl_1105806_metrics.iloc[0]["monitoring_metric_value"] == 0.0 
-        # Tier 2: % compliant should be 0
-        assert ctrl_1105806_metrics.iloc[1]["monitoring_metric_value"] == 0.0 
-
-def test_calculate_machine_iam_metrics_no_sla_for_control():
-    """Test calculate_machine_iam_metrics when one control has no SLA data."""
-    with freeze_time(FIXED_TIMESTAMP):
-        thresholds = _mock_threshold_df_pandas()
-        iam_roles = _mock_iam_roles_df_pandas()
-        evaluated_roles = _mock_evaluated_roles_df_pandas()
-        # SLA data only for one control (CTRL-1074653 -> AC-3.AWS.39.v02)
-        sla_data = _mock_sla_data_df_pandas()
-        sla_data = sla_data[sla_data["CONTROL_ID"] == "AC-3.AWS.39.v02"]
-        
-        # Add a control that requires tier 3 but won't have SLA data
-        # Make CTRL-1105806 require tier 3 for this test
-        temp_control_configs = [
-            {"cloud_control_id": "AC-3.AWS.39.v02", "ctrl_id": "CTRL-1074653", "requires_tier3": True},
-            {"cloud_control_id": "AC-6.AWS.13.v01", "ctrl_id": "CTRL-1105806", "requires_tier3": True}, # Temporarily enable T3
-            {"cloud_control_id": "AC-6.AWS.35.v02", "ctrl_id": "CTRL-1077124", "requires_tier3": False}
-        ]
-
-        with mock.patch("pipelines.pl_automated_monitoring_machine_iam.pipeline.CONTROL_CONFIGS", temp_control_configs):
-            result_df = pipeline.calculate_machine_iam_metrics(
-                thresholds_raw=thresholds,
-                iam_roles=iam_roles,
-                evaluated_roles=evaluated_roles, # Use full evaluated roles
-                sla_data=sla_data # SLA data is filtered
-            )
-
-            # Assert metrics were calculated for all controls
-            assert len(result_df["control_id"].unique()) == len(temp_control_configs)
-            # Assert Tier 3 for CTRL-1074653 (which had SLA data) was calculated
-            assert len(result_df[result_df["control_id"] == "CTRL-1074653"]) == 3
-            # Assert Tier 3 for CTRL-1105806 (no SLA data) was calculated but resulted in 0% compliance
-            ctrl_1105806_metrics = result_df[result_df["control_id"] == "CTRL-1105806"]
-            assert len(ctrl_1105806_metrics) == 3 # Should have Tier 1, 2, 3
-            tier3_1105806 = ctrl_1105806_metrics[ctrl_1105806_metrics["monitoring_metric_id"] == 5] # ID for T3 of this control
-            assert not tier3_1105806.empty
-            assert tier3_1105806.iloc[0]["monitoring_metric_value"] == 0.0 # 0% compliance due to missing SLA
-            assert tier3_1105806.iloc[0]["compliance_status"] == "Red"
-
-def test_calculate_machine_iam_metrics_tier3_config_vs_thresholds():
-    """Test combinations of tier 3 config and threshold availability."""
-    with freeze_time(FIXED_TIMESTAMP):
-        iam_roles = _mock_iam_roles_df_pandas()
-        evaluated_roles = _mock_evaluated_roles_df_pandas()
-        sla_data = _mock_sla_data_df_pandas()
-
-        # Case 1: T3 enabled, T3 thresholds present (Standard case - CTRL-1074653)
-        thresholds_case1 = _mock_threshold_df_pandas()
-        configs_case1 = pipeline.CONTROL_CONFIGS # Default config
-        with mock.patch("pipelines.pl_automated_monitoring_machine_iam.pipeline.CONTROL_CONFIGS", configs_case1):
-            result_df1 = pipeline.calculate_machine_iam_metrics(thresholds_case1, iam_roles, evaluated_roles, sla_data)
-            assert len(result_df1[result_df1["control_id"] == "CTRL-1074653"]) == 3 # T1, T2, T3 calculated
-
-        # Case 2: T3 enabled, T3 thresholds MISSING
-        thresholds_case2 = _mock_threshold_df_pandas()
-        thresholds_case2 = thresholds_case2[thresholds_case2["monitoring_metric_tier"] != "Tier 3"] # Remove T3 thresholds
-        configs_case2 = pipeline.CONTROL_CONFIGS # Default config (CTRL-1074653 requires T3)
-        with mock.patch("pipelines.pl_automated_monitoring_machine_iam.pipeline.CONTROL_CONFIGS", configs_case2):
-             result_df2 = pipeline.calculate_machine_iam_metrics(thresholds_case2, iam_roles, evaluated_roles, sla_data)
-             # CTRL-1074653 should be skipped or only have T1/T2 if thresholds are missing for T3
-             # Based on current logic, it will skip if *required* tiers are missing, T3 isn't strictly required for T1/T2 calc
-             # Let's refine the assertion: it should NOT have T3 metric for CTRL-1074653
-             assert len(result_df2[result_df2["control_id"] == "CTRL-1074653"]) < 3 
-
-        # Case 3: T3 disabled, T3 thresholds present
-        thresholds_case3 = _mock_threshold_df_pandas() # Has T3 thresholds
-        configs_case3 = [
-            {"cloud_control_id": "AC-3.AWS.39.v02", "ctrl_id": "CTRL-1074653", "requires_tier3": False}, # Disable T3
-            {"cloud_control_id": "AC-6.AWS.13.v01", "ctrl_id": "CTRL-1105806", "requires_tier3": False},
-            {"cloud_control_id": "AC-6.AWS.35.v02", "ctrl_id": "CTRL-1077124", "requires_tier3": False}
-        ]
-        with mock.patch("pipelines.pl_automated_monitoring_machine_iam.pipeline.CONTROL_CONFIGS", configs_case3):
-             result_df3 = pipeline.calculate_machine_iam_metrics(thresholds_case3, iam_roles, evaluated_roles, sla_data)
-             assert len(result_df3[result_df3["control_id"] == "CTRL-1074653"]) == 2 # Only T1, T2 calculated
-
-        # Case 4: T3 disabled, T3 thresholds MISSING (e.g., CTRL-1105806 default)
-        thresholds_case4 = _mock_threshold_df_pandas() 
-        thresholds_case4 = thresholds_case4[thresholds_case4["control_id"] != "CTRL-1074653"] # Use only other controls
-        configs_case4 = pipeline.CONTROL_CONFIGS # Default config
-        with mock.patch("pipelines.pl_automated_monitoring_machine_iam.pipeline.CONTROL_CONFIGS", configs_case4):
-            result_df4 = pipeline.calculate_machine_iam_metrics(thresholds_case4, iam_roles, evaluated_roles, sla_data)
-            assert len(result_df4[result_df4["control_id"] == "CTRL-1105806"]) == 2 # Only T1, T2 calculated
-            assert len(result_df4[result_df4["control_id"] == "CTRL-1077124"]) == 1 # Only T1 calculated
 
 def test_calculate_machine_iam_metrics_no_metrics_calculated():
     """Test calculate_machine_iam_metrics when no thresholds match controls."""

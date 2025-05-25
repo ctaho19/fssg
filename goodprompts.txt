@@ -1,1 +1,0 @@
-"Please refractor [file] to match the structure and Snowflake table conventions of the reference [file], while ensuring it remains specific to the CTRL-[] pipeline's logic."

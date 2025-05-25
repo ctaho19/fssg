@@ -41,7 +41,7 @@ class PLAutomatedMonitoringCtrl1077231(ConfigPipeline):
         self.client_id = env.exchange.client_id
         self.client_secret = env.exchange.client_secret
         self.exchange_url = env.exchange.exchange_url
-        self.cloudradar_api_url = "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
+        self.cloudradar_api_url = f"https://{self.env.exchange.exchange_url}/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
 
     def _get_api_token(self) -> str:
         """Get an API token for authentication.
@@ -96,7 +96,7 @@ def fetch_all_resources(api_connector: OauthApi, verify_ssl: Any, config_key_ful
     fetch_payload = {"searchParameters": search_payload.get("searchParameters", [{}]), "responseFields": response_fields}
     
     headers = {
-        "Accept": "application/json;v=1.0",
+        "Accept": "application/json;v=1",
         "Authorization": api_connector.api_token,
         "Content-Type": "application/json"
     }
@@ -238,15 +238,16 @@ def calculate_ctrl1077231_metrics(thresholds_raw: pd.DataFrame, context: Dict[st
         
         t1_status = get_compliance_status(tier1_metric, t1_threshold["alerting_threshold"], t1_threshold["warning_threshold"])
         t2_status = get_compliance_status(tier2_metric, t2_threshold["alerting_threshold"], t2_threshold["warning_threshold"])
-        now = int(datetime.utcnow().timestamp() * 1000)
+        
+        # Use consistent field names across all environments
+        now = datetime.now()
         results = [
-            {"date": now, "control_id": ctrl_id, "monitoring_metric_id": tier1_metric_id, "monitoring_metric_value": float(tier1_metric * 100), "compliance_status": t1_status, "numerator": int(tier1_numerator), "denominator": int(total_resources), "non_compliant_resources": [json.dumps(x) for x in tier1_non_compliant] if tier1_non_compliant else None},
-            {"date": now, "control_id": ctrl_id, "monitoring_metric_id": tier2_metric_id, "monitoring_metric_value": float(tier2_metric * 100), "compliance_status": t2_status, "numerator": int(tier2_numerator), "denominator": int(tier1_numerator), "non_compliant_resources": [json.dumps(x) for x in tier2_non_compliant] if tier2_non_compliant else None}
+            {"control_monitoring_utc_timestamp": now, "control_id": ctrl_id, "monitoring_metric_id": tier1_metric_id, "monitoring_metric_value": float(tier1_metric * 100), "monitoring_metric_status": t1_status, "metric_value_numerator": int(tier1_numerator), "metric_value_denominator": int(total_resources), "resources_info": [json.dumps(x) for x in tier1_non_compliant] if tier1_non_compliant else None},
+            {"control_monitoring_utc_timestamp": now, "control_id": ctrl_id, "monitoring_metric_id": tier2_metric_id, "monitoring_metric_value": float(tier2_metric * 100), "monitoring_metric_status": t2_status, "metric_value_numerator": int(tier2_numerator), "metric_value_denominator": int(tier1_numerator), "resources_info": [json.dumps(x) for x in tier2_non_compliant] if tier2_non_compliant else None}
         ]
         df = pd.DataFrame(results)
-        df["date"] = df["date"].astype("int64")
-        df["numerator"] = df["numerator"].astype("int64")
-        df["denominator"] = df["denominator"].astype("int64")
+        df["metric_value_numerator"] = df["metric_value_numerator"].astype("int64")
+        df["metric_value_denominator"] = df["metric_value_denominator"].astype("int64")
         return df
     except Exception as e:
         if not isinstance(e, RuntimeError):

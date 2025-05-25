@@ -1,24 +1,21 @@
 import json
 import pandas as pd
 import logging
+import random
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-import requests
-import time
-import random
+from typing import Dict, List, Optional, Tuple, Any
 
 from pandas.core.api import DataFrame as DataFrame
 
 from config_pipeline import ConfigPipeline
 from etip_env import Env
+from connectors.api import OauthApi
+from connectors.ca_certs import C1_CERT_FILE
 from connectors.exchange.oauth_token import refresh
+from transform_library import transformer
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 # KMS Keys API constants
@@ -62,28 +59,33 @@ def run(
         is_load: Whether to load the data to the destination
         dq_actions: Whether to run data quality actions
     """
-    pipeline = PLAmCTRL1077224Pipeline(env)
+    pipeline = PLAutomatedMonitoringCTRL1077224(env)
     pipeline.configure_from_filename(str(Path(__file__).parent / "config.yml"))
+    logger.info(f"Running pipeline: {pipeline.pipeline_name}")
     return (
         pipeline.run_test_data_export(dq_actions=dq_actions)
         if is_export_test_data
         else pipeline.run(load=is_load, dq_actions=dq_actions)
     )
 
-class PLAmCTRL1077224Pipeline(ConfigPipeline):
+class PLAutomatedMonitoringCTRL1077224(ConfigPipeline):
     """Pipeline for monitoring KMS Key Rotation (CTRL-1077224)."""
     
     def __init__(self, env: Env) -> None:
         super().__init__(env)
-        # Set up API token handling (simplified for this version)
-        self.headers = {
-            'Accept': 'application/json;v=1.0',
-            'Authorization': '',  # Will be populated during extract
-            'Content-Type': 'application/json'
-        }
+        self.env = env
+        self.control_id = "CTRL-1077224"
+        self.cloudradar_api_url = f"{AWS_TOOLING_BASE_URL}/search-resource-configurations"
+        
+        # Store OAuth configuration for test compatibility
+        self.client_id = env.exchange.client_id
+        self.client_secret = env.exchange.client_secret
+        self.exchange_url = env.exchange.exchange_url
         
     def _get_api_token(self) -> str:
         """Get API token for AWS Tooling API calls.
+        
+        This method is maintained for test compatibility.
         
         Returns:
             Token string for API authorization
@@ -99,6 +101,37 @@ class PLAmCTRL1077224Pipeline(ConfigPipeline):
         except Exception as e:
             logger.error(f"Failed to refresh API token: {e}")
             raise RuntimeError("API token refresh failed") from e
+            
+    def _get_api_connector(self) -> OauthApi:
+        """Get an OauthApi instance for making API requests.
+        
+        Returns:
+            OauthApi: Configured API connector
+        """
+        try:
+            api_token = refresh(
+                client_id=self.env.exchange.client_id,
+                client_secret=self.env.exchange.client_secret,
+                exchange_url=self.env.exchange.exchange_url,
+            )
+            return OauthApi(
+                url=self.cloudradar_api_url,
+                api_token=f"Bearer {api_token}",
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize API connector: {e}")
+            raise RuntimeError("API connector initialization failed") from e
+            
+    def transform(self) -> None:
+        """Prepare transformation stage by injecting API connector into context."""
+        logger.info("Preparing transform stage: Initializing API connector...")
+        api_connector = self._get_api_connector()
+        
+        self.context["api_connector"] = api_connector
+        self.context["api_verify_ssl"] = C1_CERT_FILE
+        
+        logger.info("API context injected. Proceeding with config-defined transforms.")
+        super().transform()
     
     def get_summary_count(self, payload: Dict, timeout: int = 30, max_retries: int = 2) -> Optional[int]:
         """Fetch the total count of resources from the summary-view API.
@@ -808,11 +841,290 @@ class PLAmCTRL1077224Pipeline(ConfigPipeline):
         """Extract monitoring data."""
         logger.info("Starting extraction for CTRL-1077224 (KMS Key Rotation)")
         df = super().extract()
+        return df
+
+@transformer
+def calculate_ctrl1077224_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
+    """Calculate metrics for CTRL-1077224 (KMS Key Rotation) based on resource configurations and thresholds."""
+    control_id = "CTRL-1077224"
+    current_date = datetime.now()
+    
+    # Get control config and metric IDs
+    control_config = KMS_KEY_ROTATION_TIERS.get(control_id, {})
+    config_key = control_config.get("rotation_config_key", "supplementaryConfiguration.KeyRotationStatus")
+    expected_value = control_config.get("rotation_expected_value", "TRUE")
+    
+    # Get metric IDs from thresholds DataFrame based on tier
+    tier1_metrics = thresholds_raw[(thresholds_raw["control_id"] == control_id) & 
+                               (thresholds_raw["monitoring_metric_tier"] == "Tier 1")]
+    tier2_metrics = thresholds_raw[(thresholds_raw["control_id"] == control_id) & 
+                               (thresholds_raw["monitoring_metric_tier"] == "Tier 2")]
+    
+    if tier1_metrics.empty or tier2_metrics.empty:
+        # Fallback to config if metrics not found in thresholds
+        tier1_metric_id = control_config.get("tier1_metric_id", "MNTR-1077224-T1")
+        tier2_metric_id = control_config.get("tier2_metric_id", "MNTR-1077224-T2")
+        logger.warning(f"Missing threshold data in DataFrame, using fallback metric IDs: {tier1_metric_id}, {tier2_metric_id}")
+    else:
+        tier1_metric_id = tier1_metrics.iloc[0]["monitoring_metric_id"]
+        tier2_metric_id = tier2_metrics.iloc[0]["monitoring_metric_id"]
         
-        # Get threshold data from Snowflake
-        threshold_df = df.get("threshold_df", pd.DataFrame())
+    # Convert string metric IDs to int if needed
+    tier1_metric_id_int = int(tier1_metric_id.split('-')[-1]) if isinstance(tier1_metric_id, str) else tier1_metric_id
+    tier2_metric_id_int = int(tier2_metric_id.split('-')[-1]) if isinstance(tier2_metric_id, str) else tier2_metric_id
+    
+    # Initialize output dataframe and resource fields
+    desired_fields = [
+        "accountResourceId", "resourceId", "resourceType", 
+        config_key, "configuration.keyState", "configuration.keyManager", "source"
+    ]
+    
+    try:
+        # Get API connector from context
+        api_connector = context["api_connector"]
+        verify_ssl = context["api_verify_ssl"]
         
-        # Extract KMS Key Rotation data
-        df["kms_key_rotation_df"] = self.extract_kms_key_rotation(threshold_df)
+        # Set up request for KMS keys
+        headers = {
+            "Accept": "application/json;v=1.0",
+            "Authorization": api_connector.api_token,
+            "Content-Type": "application/json"
+        }
+        
+        config_payload = {
+            "searchParameters": [{"resourceType": "AWS::KMS::Key"}],
+            "responseFields": [
+                "accountName", "accountResourceId", "amazonResourceName", "resourceId", 
+                "resourceType", "configurationList", "configuration.keyManager", "configuration.keyState",
+                "supplementaryConfiguration", "supplementaryConfiguration.KeyRotationStatus", 
+                "source"
+            ]
+        }
+        
+        # Step 1: Fetch all KMS Keys
+        logger.info("Fetching all KMS Key configurations...")
+        request_kwargs = {
+            "headers": headers,
+            "json": config_payload,
+            "verify": verify_ssl,
+            "timeout": 120
+        }
+        
+        try:
+            # Use OauthApi to fetch resources
+            all_resources = []
+            fetched_count = 0
+            next_record_key = ""
+            
+            while True:
+                params = {"limit": 10000}
+                if next_record_key:
+                    params["nextRecordKey"] = next_record_key
+                
+                curr_request_kwargs = request_kwargs.copy()
+                curr_request_kwargs["params"] = params
+                
+                response = api_connector.send_request(
+                    url=api_connector.url,
+                    request_type="post",
+                    request_kwargs=curr_request_kwargs,
+                    retry_delay=5,
+                    max_retries=3
+                )
+                
+                if response is None or response.status_code > 299:
+                    raise RuntimeError(f"API error: {getattr(response, 'status_code', 'None')}")
+                
+                data = response.json()
+                resources = data.get("resourceConfigurations", [])
+                all_resources.extend(resources)
+                fetched_count += len(resources)
+                
+                next_record_key = data.get("nextRecordKey", "")
+                if not next_record_key:
+                    break
+                
+                # Small delay to avoid rate limits
+                time.sleep(0.15)
+                
+        except Exception as e:
+            logger.error(f"API request failed: {str(e)}")
+            raise RuntimeError(f"Critical API fetch failure: {str(e)}") from e
+            
+        fetched_total_count = len(all_resources)
+            
+        if fetched_total_count == 0:
+            logger.warning("No KMS Keys found via API. Returning zero metrics.")
+            # Create default metrics entries with 0 values
+            now = int(datetime.utcnow().timestamp() * 1000)
+            results = [
+                {"date": now, "control_id": control_id, "monitoring_metric_id": tier1_metric_id_int, 
+                 "monitoring_metric_value": 0.0, "compliance_status": "Red", "numerator": 0, 
+                 "denominator": 0, "non_compliant_resources": None},
+                {"date": now, "control_id": control_id, "monitoring_metric_id": tier2_metric_id_int, 
+                 "monitoring_metric_value": 0.0, "compliance_status": "Red", "numerator": 0, 
+                 "denominator": 0, "non_compliant_resources": None}
+            ]
+            df = pd.DataFrame(results)
+            return df
+            
+        logger.info(f"Successfully fetched {fetched_total_count} total KMS Key configurations.")
+        
+        # Step 2: Filter resources
+        in_scope_resources = []
+        excluded_resources = []
+        
+        # Apply exclusion filters
+        for resource in all_resources:
+            exclude = False
+            
+            # Check for orphaned keys
+            source_field = resource.get("source")
+            if source_field == "CT-AccessDenied":
+                exclude = True
+                excluded_resources.append(resource)
+                continue
+                
+            # Check configurations
+            config_list = resource.get("configurationList", [])
+            key_state = None
+            key_manager = None
+            
+            for config in config_list:
+                config_name = config.get("configurationName")
+                config_value = config.get("configurationValue")
+                
+                if config_name == "configuration.keyState":
+                    key_state = config_value
+                elif config_name == "configuration.keyManager":
+                    key_manager = config_value
+            
+            # Check exclusion conditions
+            if key_state in ["PendingDeletion", "PendingReplicaDeletion"]:
+                exclude = True
+                excluded_resources.append(resource)
+            elif key_manager == "AWS":
+                exclude = True
+                excluded_resources.append(resource)
+            else:
+                in_scope_resources.append(resource)
+                
+        # Prepare for Tier 1 and Tier 2 checks
+        final_denominator = len(in_scope_resources)
+        logger.info(f"In-Scope resources: {final_denominator}, Excluded: {len(excluded_resources)}")
+        
+        if final_denominator == 0:
+            logger.warning("No resources remaining in scope after filtering.")
+            tier1_numerator = 0
+            tier2_numerator = 0
+            tier1_non_compliant = []
+            tier2_non_compliant = []
+            tier2_denominator = 0
+        else:
+            # Tier 1 and Tier 2 filtering
+            tier1_numerator = 0
+            tier2_numerator = 0
+            tier1_non_compliant = []
+            tier2_non_compliant = []
+            
+            for resource in in_scope_resources:
+                # Check for rotation status
+                supp_config_list = resource.get("supplementaryConfiguration", [])
+                rotation_item = next((c for c in supp_config_list if c.get("supplementaryConfigurationName") == config_key), None)
+                rotation_value = rotation_item.get("supplementaryConfigurationValue") if rotation_item else None
+                
+                # Tier 1 check: Does the key have a rotation status?
+                if rotation_value and str(rotation_value).strip():
+                    tier1_numerator += 1
+                    # Tier 2 check: Is rotation enabled?
+                    if str(rotation_value).upper() == expected_value:
+                        tier2_numerator += 1
+                    else:
+                        non_compliant_info = {
+                            "resourceId": resource.get("resourceId", "N/A"),
+                            "accountResourceId": resource.get("accountResourceId", "N/A"),
+                            "keyState": next((c.get("configurationValue") for c in resource.get("configurationList", []) 
+                                          if c.get("configurationName") == "configuration.keyState"), "N/A"),
+                            "rotationStatus": rotation_value
+                        }
+                        tier2_non_compliant.append(non_compliant_info)
+                else:
+                    non_compliant_info = {
+                        "resourceId": resource.get("resourceId", "N/A"),
+                        "accountResourceId": resource.get("accountResourceId", "N/A"),
+                        "keyState": next((c.get("configurationValue") for c in resource.get("configurationList", []) 
+                                      if c.get("configurationName") == "configuration.keyState"), "N/A"),
+                        "rotationStatus": "MISSING"
+                    }
+                    tier1_non_compliant.append(non_compliant_info)
+            
+            tier2_denominator = tier1_numerator
+        
+        # Calculate metrics
+        tier1_metric = tier1_numerator / final_denominator if final_denominator > 0 else 0
+        tier2_metric = tier2_numerator / tier2_denominator if tier2_denominator > 0 else 0
+        
+        # Get thresholds from DataFrame
+        t1_threshold = tier1_metrics.iloc[0] if not tier1_metrics.empty else None
+        t2_threshold = tier2_metrics.iloc[0] if not tier2_metrics.empty else None
+        
+        # Set default thresholds if not found
+        t1_alert = t1_threshold["alerting_threshold"] if t1_threshold is not None else 95.0
+        t1_warning = t1_threshold["warning_threshold"] if t1_threshold is not None else 97.0
+        
+        t2_alert = t2_threshold["alerting_threshold"] if t2_threshold is not None else 95.0
+        t2_warning = t2_threshold["warning_threshold"] if t2_threshold is not None else 97.0
+        
+        # Determine compliance status
+        tier1_status = get_compliance_status(tier1_metric, t1_alert, t1_warning)
+        tier2_status = get_compliance_status(tier2_metric, t2_alert, t2_warning)
+        
+        # Create final result
+        now = int(datetime.utcnow().timestamp() * 1000)
+        results = [
+            {"date": now, "control_id": control_id, "monitoring_metric_id": tier1_metric_id_int, 
+             "monitoring_metric_value": float(tier1_metric * 100), "compliance_status": tier1_status, 
+             "numerator": int(tier1_numerator), "denominator": int(final_denominator), 
+             "non_compliant_resources": [json.dumps(x) for x in tier1_non_compliant[:50]] if tier1_non_compliant else None},
+            {"date": now, "control_id": control_id, "monitoring_metric_id": tier2_metric_id_int, 
+             "monitoring_metric_value": float(tier2_metric * 100), "compliance_status": tier2_status, 
+             "numerator": int(tier2_numerator), "denominator": int(tier2_denominator), 
+             "non_compliant_resources": [json.dumps(x) for x in tier2_non_compliant[:50]] if tier2_non_compliant else None}
+        ]
+        
+        # Create DataFrame with standardized columns
+        df = pd.DataFrame(results)
+        df["date"] = df["date"].astype("int64")
+        df["numerator"] = df["numerator"].astype("int64")
+        df["denominator"] = df["denominator"].astype("int64")
+        
+        logger.info(f"Metrics: Tier 1 = {tier1_metric:.2%}, Tier 2 = {tier2_metric:.2%}")
+        logger.info(f"Status: Tier 1 = {tier1_status}, Tier 2 = {tier2_status}")
         
         return df
+        
+    except Exception as e:
+        if not isinstance(e, RuntimeError):
+            logger.error(f"Unexpected error in calculate_ctrl1077224_metrics: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to calculate metrics: {str(e)}") from e
+        raise
+
+def get_compliance_status(metric: float, alert_threshold: float, warning_threshold: Optional[float] = None) -> str:
+    """Calculate compliance status based on metric value and thresholds."""
+    metric_percentage = metric * 100
+    try:
+        alert_threshold_f = float(alert_threshold)
+    except (TypeError, ValueError):
+        return "Red"
+    warning_threshold_f = None
+    if warning_threshold is not None:
+        try:
+            warning_threshold_f = float(warning_threshold)
+        except (TypeError, ValueError):
+            warning_threshold_f = None
+    if metric_percentage >= alert_threshold_f:
+        return "Green"
+    elif warning_threshold_f is not None and metric_percentage >= warning_threshold_f:
+        return "Yellow"
+    else:
+        return "Red"
