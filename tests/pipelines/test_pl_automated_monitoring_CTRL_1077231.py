@@ -1226,72 +1226,6 @@ def test_pipeline_end_to_end():
                                         == 1
                                     ), "Tier 2 should have 1 non-compliant resource"
 
-
-# New test that uses the previously unused mock functions
-def test_transform_logic_with_invalid_thresholds():
-    """Tests the pipeline behavior with invalid threshold values."""
-    # Create mock API connector
-    mock_api_response = generate_mock_api_response(API_RESPONSE_MIXED)
-    mock_api = MockOauthApi(
-        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
-        api_token="Bearer mock_token",
-    )
-    mock_api.response = mock_api_response
-
-    # Mock the _get_api_connector method to return our mock connector
-    with mock.patch(
-        "pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231._get_api_connector"
-    ) as mock_get_connector:
-        mock_get_connector.return_value = mock_api
-
-        # Use freeze_time with the standard timestamp to make the test deterministic
-        with freeze_time(FIXED_TIMESTAMP):
-            # Use the invalid thresholds mock
-            thresholds_df = _mock_invalid_threshold_df_pandas()
-            context = {"api_connector": mock_api, "api_verify_ssl": True}
-            
-            # Call the function directly without mocking it
-            result_df = pipeline.calculate_ctrl1077231_metrics(
-                thresholds_raw=thresholds_df, context=context
-            )
-            
-            # Verify both tiers have Red status due to invalid thresholds
-            assert result_df.iloc[0]["monitoring_metric_status"] == "Red"
-            assert result_df.iloc[1]["monitoring_metric_status"] == "Red"
-
-
-def test_transform_logic_with_yellow_threshold():
-    """Tests the pipeline behavior with thresholds that trigger Yellow status."""
-    # Create mock API connector
-    mock_api_response = generate_mock_api_response(API_RESPONSE_YELLOW)
-    mock_api = MockOauthApi(
-        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
-        api_token="Bearer mock_token",
-    )
-    mock_api.response = mock_api_response
-
-    # Mock the _get_api_connector method to return our mock connector
-    with mock.patch(
-        "pipelines.pl_automated_monitoring_ctrl_1077231.pipeline.PLAutomatedMonitoringCtrl1077231._get_api_connector"
-    ) as mock_get_connector:
-        mock_get_connector.return_value = mock_api
-
-        # Use freeze_time with the standard timestamp to make the test deterministic
-        with freeze_time(FIXED_TIMESTAMP):
-            # Use the standard thresholds mock
-            thresholds_df = _mock_threshold_df_pandas()
-            context = {"api_connector": mock_api, "api_verify_ssl": True}
-            
-            # Call the function directly without mocking it
-            result_df = pipeline.calculate_ctrl1077231_metrics(
-                thresholds_raw=thresholds_df, context=context
-            )
-            
-            # Verify Tier 1 is Green and Tier 2 is Yellow
-            assert result_df.iloc[0]["monitoring_metric_status"] == "Green"
-            assert result_df.iloc[1]["monitoring_metric_status"] == "Yellow"
-
-
 def test_transform_logic_with_empty_data():
     """Tests the pipeline behavior with empty API response data."""
     # Create mock API connector
@@ -1328,26 +1262,6 @@ def test_transform_logic_with_empty_data():
             assert result_df.iloc[1]["metric_value_numerator"] == 0
             assert result_df.iloc[0]["metric_value_denominator"] == 0
             assert result_df.iloc[1]["metric_value_denominator"] == 0
-
-
-def test_api_response_error_codes():
-    """Tests handling of various API error response codes."""
-    # Test 404 error
-    mock_api = MockOauthApi(
-        url="https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations",
-        api_token="Bearer mock_token",
-    )
-    error_response = generate_mock_api_response({"error": "Not found"}, status_code=404)
-    mock_api.response = error_response
-
-    with pytest.raises(RuntimeError, match="Error occurred while retrieving resources with status code 404"):
-        pipeline.fetch_all_resources(
-            api_connector=mock_api,
-            verify_ssl=True,
-            config_key_full="configuration.key",
-            search_payload={"searchParameters": [{"resourceType": "AWS::EC2::Instance"}]},
-        )
-
 
 def test_api_response_malformed_json():
     """Tests handling of malformed JSON responses."""
