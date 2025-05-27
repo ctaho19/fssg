@@ -6,10 +6,12 @@ import ssl
 import os
 import logging
 import time
-from pipeline_framework import ConfigPipeline, transformer
-from pipeline_framework.env import Env
-from pipeline_framework.connectors.oauth_api import OauthApi
-from pipeline_framework.connectors.auth import refresh
+from config_pipeline import ConfigPipeline
+from connectors.api import OauthApi
+from connectors.ca_certs import C1_CERT_FILE
+from connectors.exchange.oauth_token import refresh
+from etip_env import Env
+from transform_library import transformer
 
 logger = logging.getLogger(__name__)
 

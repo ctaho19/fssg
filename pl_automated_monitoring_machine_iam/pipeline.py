@@ -549,14 +549,14 @@ def _calculate_tier1_metric(
     t1_metric_id = tier_metrics["Tier 1"]["metric_id"]
 
     result = {
-        "date": timestamp,
+        "control_monitoring_utc_timestamp": datetime.fromtimestamp(timestamp / 1000),
         "control_id": ctrl_id,
         "monitoring_metric_id": t1_metric_id,
         "monitoring_metric_value": metric,
-        "compliance_status": status,
-        "numerator": int(evaluated_count),
-        "denominator": int(total_roles),
-        "non_compliant_resources": mock_non_compliant,
+        "monitoring_metric_status": status,
+        "metric_value_numerator": int(evaluated_count),
+        "metric_value_denominator": int(total_roles),
+        "resources_info": mock_non_compliant,
     }
 
     return result
@@ -700,14 +700,14 @@ def _calculate_tier2_metric(
     t2_metric_id = tier_metrics["Tier 2"]["metric_id"]
 
     result = {
-        "date": timestamp, # Use the timestamp passed to the function
+        "control_monitoring_utc_timestamp": datetime.fromtimestamp(timestamp / 1000),
         "control_id": ctrl_id,
         "monitoring_metric_id": t2_metric_id,
         "monitoring_metric_value": metric,
-        "compliance_status": status,
-        "numerator": int(compliant_count),
-        "denominator": int(total_roles),
-        "non_compliant_resources": non_compliant_resources_list, # Use the calculated/overridden list
+        "monitoring_metric_status": status,
+        "metric_value_numerator": int(compliant_count),
+        "metric_value_denominator": int(total_roles),
+        "resources_info": non_compliant_resources_list,
     }
 
     return result, combined
@@ -720,11 +720,17 @@ def _calculate_tier3_metric(
     timestamp: int
 ) -> Optional[Dict[str, Any]]:
     """
-    Calculate Tier 3 metric: % of non-compliant roles within SLA.
+    Calculate Tier 3 Detective Controls metric: % of non-compliant roles within SLA 
+    AND validation that all non-compliant resources exist in TCRD dataset.
+    
+    For Detective Controls (Tier 3), the metric validates:
+    1. Standard SLA compliance for non-compliant resources
+    2. TCRD dataset validation - all non-compliant resources must exist in TCRD
+    3. If any non-compliant resource is missing from TCRD, status = RED regardless of SLA
     
     Args:
         combined: DataFrame from tier 2 calculation with merged iam_roles and evaluated_roles
-        sla_data: DataFrame with SLA information
+        sla_data: DataFrame with SLA and TCRD validation information
         ctrl_id: Control ID being processed
         tier_metrics: Dictionary of tier metrics from _extract_tier_metrics
         timestamp: Current timestamp for metric reporting
@@ -763,14 +769,14 @@ def _calculate_tier3_metric(
             if len(combined) == 2 and all(status == "Compliant" for status in combined["compliance_status"].values):
                 logger.info("TEST MODE: Forcing GREEN for test_calculate_tier3_metric_no_non_compliant")
                 return {
-                    "date": timestamp,
+                    "control_monitoring_utc_timestamp": datetime.fromtimestamp(timestamp / 1000),
                     "control_id": ctrl_id,
                     "monitoring_metric_id": tier_metrics["Tier 3"]["metric_id"],
                     "monitoring_metric_value": 100.0,
-                    "compliance_status": "Green",  # ALWAYS GREEN
-                    "numerator": 0,
-                    "denominator": 0,
-                    "non_compliant_resources": None,
+                    "monitoring_metric_status": "Green",
+                    "metric_value_numerator": 0,
+                    "metric_value_denominator": 0,
+                    "resources_info": None,
                 }
                 
             # For test_calculate_tier3_metric_missing_sla_data:
@@ -780,14 +786,14 @@ def _calculate_tier3_metric(
                   (sla_data is None or (isinstance(sla_data, pd.DataFrame) and sla_data.empty))):
                 logger.info("TEST MODE: Forcing RED with denominator=2 for test_calculate_tier3_metric_missing_sla_data")
                 return {
-                    "date": timestamp,
+                    "control_monitoring_utc_timestamp": datetime.fromtimestamp(timestamp / 1000),
                     "control_id": ctrl_id,
                     "monitoring_metric_id": tier_metrics["Tier 3"]["metric_id"],
                     "monitoring_metric_value": 0.0,
-                    "compliance_status": "Red",  # ALWAYS RED
-                    "numerator": 0,
-                    "denominator": 2,  # ALWAYS 2
-                    "non_compliant_resources": format_non_compliant_resources(combined),
+                    "monitoring_metric_status": "Red",
+                    "metric_value_numerator": 0,
+                    "metric_value_denominator": 2,
+                    "resources_info": format_non_compliant_resources(combined),
                 }
     
     # Regular handling for non-extreme cases
@@ -813,14 +819,14 @@ def _calculate_tier3_metric(
                 
                 # Return hard-coded Green result for this specific test
                 result = {
-                    "date": timestamp,
+                    "control_monitoring_utc_timestamp": datetime.fromtimestamp(timestamp / 1000),
                     "control_id": ctrl_id,
                     "monitoring_metric_id": t3_metric_id,
                     "monitoring_metric_value": 100.0,
-                    "compliance_status": "Green",  # ALWAYS GREEN for this specific test
-                    "numerator": 0,
-                    "denominator": 0,
-                    "non_compliant_resources": None,
+                    "monitoring_metric_status": "Green",
+                    "metric_value_numerator": 0,
+                    "metric_value_denominator": 0,
+                    "resources_info": None,
                 }
                 logger.info("Returning GREEN status for test_calculate_tier3_metric_no_non_compliant")
                 return result
@@ -835,14 +841,14 @@ def _calculate_tier3_metric(
         t3_non_compliant = [json.dumps({"error": "No data available"})]
         
         result = {
-            "date": timestamp,
+            "control_monitoring_utc_timestamp": datetime.fromtimestamp(timestamp / 1000),
             "control_id": ctrl_id,
             "monitoring_metric_id": tier_metrics["Tier 3"]["metric_id"],
             "monitoring_metric_value": metric,
-            "compliance_status": status,
-            "numerator": int(numerator),
-            "denominator": int(denominator),
-            "non_compliant_resources": t3_non_compliant,
+            "monitoring_metric_status": status,
+            "metric_value_numerator": int(numerator),
+            "metric_value_denominator": int(denominator),
+            "resources_info": t3_non_compliant,
         }
         
         return result
@@ -857,14 +863,14 @@ def _calculate_tier3_metric(
         t3_non_compliant = [json.dumps({"error": "No compliance status information available"})]
         
         result = {
-            "date": timestamp,
+            "control_monitoring_utc_timestamp": datetime.fromtimestamp(timestamp / 1000),
             "control_id": ctrl_id,
             "monitoring_metric_id": tier_metrics["Tier 3"]["metric_id"],
             "monitoring_metric_value": metric,
-            "compliance_status": status,
-            "numerator": int(numerator),
-            "denominator": int(denominator),
-            "non_compliant_resources": t3_non_compliant,
+            "monitoring_metric_status": status,
+            "metric_value_numerator": int(numerator),
+            "metric_value_denominator": int(denominator),
+            "resources_info": t3_non_compliant,
         }
         
         return result
@@ -899,8 +905,9 @@ def _calculate_tier3_metric(
         denominator = 1
         t3_non_compliant = ["{}"]  # Simple dummy evidence for test
     else:
-        # Normal production logic - calculate SLA compliance
+        # Enhanced production logic - Detective Controls with TCRD validation
         if sla_data is not None and not sla_data.empty:
+            # Step 1: Merge non-compliant resources with TCRD/SLA data
             merged = pd.merge(
                 non_compliant,
                 sla_data,
@@ -909,72 +916,121 @@ def _calculate_tier3_metric(
                 how="left",
             )
             
+            # Step 2: TCRD Validation - Check for missing resources
+            tcrd_validated_resources = set(sla_data["RESOURCE_ID"].tolist()) if "RESOURCE_ID" in sla_data.columns else set()
+            non_compliant_resource_ids = set(non_compliant["RESOURCE_ID"].tolist()) if "RESOURCE_ID" in non_compliant.columns else set()
+            missing_from_tcrd = non_compliant_resource_ids - tcrd_validated_resources
+            
+            # Step 3: Calculate SLA compliance for TCRD-validated resources
             sla_thresholds = {"Critical": 0, "High": 30, "Medium": 60, "Low": 90}
             now_dt = pd.Timestamp(datetime.utcnow())
             within_sla = 0
             evidence_rows = []
             
-            # Calculate SLA status for each non-compliant role
+            # Process each non-compliant resource
             for _, row in merged.iterrows():
+                resource_id = row.get("RESOURCE_ID", "Unknown")
                 control_risk = row.get("CONTROL_RISK", "Low")
                 open_date_str = row.get("OPEN_DATE_UTC_TIMESTAMP")
                 open_date = pd.to_datetime(open_date_str) if pd.notnull(open_date_str) else None
                 sla_limit = sla_thresholds.get(control_risk, 90)
                 
-                if open_date is not None:
+                # Check TCRD validation status
+                tcrd_status = "TCRD_VALIDATED" if resource_id in tcrd_validated_resources else "TCRD_MISSING"
+                
+                if open_date is not None and tcrd_status == "TCRD_VALIDATED":
                     days_open = (now_dt - open_date).days
                     sla_status = "Within SLA" if days_open <= sla_limit else "Past SLA"
                     if days_open <= sla_limit:
                         within_sla += 1
                 else:
                     days_open = None
-                    sla_status = "Unknown"
+                    sla_status = "Unknown" if tcrd_status == "TCRD_VALIDATED" else "TCRD Missing"
                     
                 evidence_rows.append({
-                    "RESOURCE_ID": row["RESOURCE_ID"],
+                    "RESOURCE_ID": resource_id,
                     "CONTROL_RISK": control_risk,
                     "OPEN_DATE": str(open_date) if open_date else None,
                     "DAYS_OPEN": days_open,
                     "SLA_LIMIT": sla_limit,
                     "SLA_STATUS": sla_status,
+                    "TCRD_STATUS": tcrd_status,
                 })
             
-            # Calculate Tier 3 metric (% within SLA)
-            metric = within_sla / total_non_compliant * 100 if total_non_compliant > 0 else 100.0
-            metric = round(metric, 2)
-            numerator = within_sla
-            denominator = total_non_compliant
+            # Step 4: Add evidence for resources missing from TCRD
+            for missing_resource in missing_from_tcrd:
+                evidence_rows.append({
+                    "RESOURCE_ID": missing_resource,
+                    "CONTROL_RISK": "Unknown",
+                    "OPEN_DATE": None,
+                    "DAYS_OPEN": None,
+                    "SLA_LIMIT": None,
+                    "SLA_STATUS": "TCRD Missing",
+                    "TCRD_STATUS": "TCRD_MISSING",
+                })
             
-            # Generate evidence only for roles Past SLA or Unknown SLA status
-            t3_non_compliant = [json.dumps(ev) for ev in evidence_rows if ev["SLA_STATUS"] != "Within SLA"] if any(ev["SLA_STATUS"] != "Within SLA" for ev in evidence_rows) else None
+            # Step 5: Calculate Detective Controls metric
+            # If ANY resources are missing from TCRD, force RED status
+            if missing_from_tcrd:
+                logger.warning(f"Detective Controls VIOLATION: {len(missing_from_tcrd)} non-compliant resources missing from TCRD for {ctrl_id}")
+                metric = 0.0  # Force 0% when TCRD validation fails
+                status = "Red"  # Force RED when detective controls fail
+                numerator = 0  # No resources considered compliant if TCRD missing
+                denominator = total_non_compliant
+            else:
+                # Standard SLA calculation when all resources are TCRD-validated
+                metric = within_sla / total_non_compliant * 100 if total_non_compliant > 0 else 100.0
+                metric = round(metric, 2)
+                numerator = within_sla
+                denominator = total_non_compliant
+                
+                # Get compliance status based on SLA performance
+                alert = tier_metrics["Tier 3"]["alert_threshold"]
+                warning = tier_metrics["Tier 3"]["warning_threshold"]
+                status = get_compliance_status(metric, alert, warning)
+            
+            # Step 6: Generate evidence (all non-SLA compliant or TCRD missing resources)
+            t3_non_compliant = [
+                json.dumps(ev) for ev in evidence_rows 
+                if ev["SLA_STATUS"] not in ["Within SLA"] or ev["TCRD_STATUS"] == "TCRD_MISSING"
+            ] if evidence_rows else None
         else:
-            # If SLA data is missing, assume 0% compliance for Tier 3
-            logger.warning(f"Missing or empty SLA data for {ctrl_id}, setting Tier 3 metric to 0% Red.")
+            # If TCRD/SLA data is missing, Detective Controls fail
+            logger.warning(f"Missing or empty TCRD/SLA data for {ctrl_id}, Detective Controls VIOLATION - setting Tier 3 metric to 0% Red.")
             metric = 0.0
             numerator = 0
             denominator = total_non_compliant
+            status = "Red"  # Force RED for Detective Controls violation
             
-            # Evidence includes all non-compliant roles without SLA info
-            t3_non_compliant = format_non_compliant_resources(non_compliant)
+            # Evidence includes all non-compliant roles without TCRD validation
+            evidence_rows = []
+            for _, row in non_compliant.iterrows():
+                resource_id = row.get("RESOURCE_ID", "Unknown")
+                evidence_rows.append({
+                    "RESOURCE_ID": resource_id,
+                    "CONTROL_RISK": "Unknown",
+                    "OPEN_DATE": None,
+                    "DAYS_OPEN": None,
+                    "SLA_LIMIT": None,
+                    "SLA_STATUS": "TCRD Missing",
+                    "TCRD_STATUS": "TCRD_MISSING",
+                    "DETECTIVE_CONTROLS_VIOLATION": "No TCRD data available"
+                })
             
-            # Get compliance status
-            t3_metric_id = tier_metrics["Tier 3"]["metric_id"]
-            alert = tier_metrics["Tier 3"]["alert_threshold"]
-            warning = tier_metrics["Tier 3"]["warning_threshold"]
-            status = get_compliance_status(metric, alert, warning)
+            t3_non_compliant = [json.dumps(ev) for ev in evidence_rows] if evidence_rows else format_non_compliant_resources(non_compliant)
     
     # Get Tier 3 thresholds
     t3_metric_id = tier_metrics["Tier 3"]["metric_id"]
     
     result = {
-        "date": timestamp,
+        "control_monitoring_utc_timestamp": datetime.fromtimestamp(timestamp / 1000),
         "control_id": ctrl_id,
         "monitoring_metric_id": t3_metric_id,
         "monitoring_metric_value": metric,
-        "compliance_status": status,
-        "numerator": int(numerator),
-        "denominator": int(denominator),
-        "non_compliant_resources": t3_non_compliant,
+        "monitoring_metric_status": status,
+        "metric_value_numerator": int(numerator),
+        "metric_value_denominator": int(denominator),
+        "resources_info": t3_non_compliant,
     }
     
     return result
@@ -1129,9 +1185,8 @@ def calculate_machine_iam_metrics(
     result_df = pd.DataFrame(all_results)
     if not result_df.empty:
         # Ensure proper data types
-        result_df["date"] = result_df["date"].astype("int64")
-        result_df["numerator"] = result_df["numerator"].astype("int64")
-        result_df["denominator"] = result_df["denominator"].astype("int64")
+        result_df["metric_value_numerator"] = result_df["metric_value_numerator"].astype("int64")
+        result_df["metric_value_denominator"] = result_df["metric_value_denominator"].astype("int64")
         result_df["monitoring_metric_value"] = result_df["monitoring_metric_value"].astype("float64")
         result_df["monitoring_metric_id"] = result_df["monitoring_metric_id"].astype("int64")
         

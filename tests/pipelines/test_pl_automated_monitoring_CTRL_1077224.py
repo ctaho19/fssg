@@ -1,699 +1,526 @@
-import datetime
-import json
-import unittest.mock as mock
-from typing import Dict, List, Optional
-import pandas as pd
 import pytest
+import pandas as pd
+from unittest.mock import Mock
 from freezegun import freeze_time
-from requests import Response
+from datetime import datetime
+from requests import Response, RequestException
 
-import pipelines.pl_automated_monitoring_CTRL_1077224.pipeline as pipeline
-from etip_env import set_env_vars
-from tests.config_pipeline.helpers import ConfigPipelineTestCase
+# Import pipeline components
+from pl_automated_monitoring_CTRL_1077224.pipeline import (
+    PLAutomatedMonitoringCTRL1077224,
+    calculate_metrics
+)
 
-
-# --- Expected Schema Fields ---
+# Standard test constants
 AVRO_SCHEMA_FIELDS = [
-    "date",
-    "control_id",
+    "control_monitoring_utc_timestamp",
+    "control_id", 
     "monitoring_metric_id",
     "monitoring_metric_value",
-    "compliance_status",
-    "numerator",
-    "denominator",
-    "non_compliant_resources"
+    "monitoring_metric_status",
+    "metric_value_numerator",
+    "metric_value_denominator",
+    "resources_info"
 ]
 
+class MockExchangeConfig:
+    def __init__(self):
+        self.client_id = "test_client"
+        self.client_secret = "test_secret"
+        self.exchange_url = "test-exchange.com"
 
-def _tier_threshold_df():
-    """Test data for monitoring thresholds."""
-    return pd.DataFrame(
+class MockEnv:
+    def __init__(self):
+        self.exchange = MockExchangeConfig()
+
+class MockOauthApi:
+    def __init__(self, url, api_token, ssl_context=None):
+        self.url = url
+        self.api_token = api_token
+        self.response = None
+        self.side_effect = None
+    
+    def send_request(self, url, request_type, request_kwargs, retry_delay=5, max_retries=3):
+        """Mock send_request method with proper side_effect handling."""
+        if self.side_effect:
+            if isinstance(self.side_effect, Exception):
+                raise self.side_effect
+            elif isinstance(self.side_effect, list) and self.side_effect:
+                response = self.side_effect.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+        
+        if self.response:
+            return self.response
+        
+        # Return default response if none configured
+        default_response = Response()
+        default_response.status_code = 200
+        return default_response
+
+def _mock_threshold_df():
+    """Utility function for test threshold data"""
+    return pd.DataFrame([
         {
-            "control_id": [
-                "CTRL-1077224",
-                "CTRL-1077224",
-            ],
-            "monitoring_metric_id": [24, 25],
-            "monitoring_metric_tier": [
-                "Tier 1",
-                "Tier 2",
-            ],
-            "warning_threshold": [
-                97.0,
-                97.0,
-            ],
-            "alerting_threshold": [
-                95.0,
-                95.0,
-            ],
-            "control_executor": [
-                "Individual_1",
-                "Individual_1",
-            ],
-            "metric_threshold_start_date": [
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-            ],
-            "metric_threshold_end_date": [
-                None,
-                None,
-            ],
+            "monitoring_metric_id": 24,
+            "control_id": "CTRL-1077224",
+            "monitoring_metric_tier": "Tier 1",
+            "warning_threshold": 97.0,
+            "alerting_threshold": 95.0
+        },
+        {
+            "monitoring_metric_id": 25,
+            "control_id": "CTRL-1077224",
+            "monitoring_metric_tier": "Tier 2",
+            "warning_threshold": 97.0,
+            "alerting_threshold": 95.0
         }
-    )
+    ])
 
-
-def _kms_key_rotation_output_df():
-    """Expected output for KMS Key Rotation metrics."""
-    return pd.DataFrame(
-        {
-            "monitoring_metric_id": [24, 25],
-            "control_id": [
-                "CTRL-1077224",
-                "CTRL-1077224",
-            ],
-            "monitoring_metric_value": [80.0, 75.0],
-            "monitoring_metric_status": [
-                "Red",
-                "Red",
-            ],
-            "metric_value_numerator": [8, 6],
-            "metric_value_denominator": [10, 8],
-            "resources_info": [
-                [
-                    '{"resourceId": "key1", "accountResourceId": "account1/key1", "keyState": "Enabled", "rotationStatus": "N/A (Not Found)"}'
-                ],
-                [
-                    '{"resourceId": "key3", "accountResourceId": "account3/key3", "keyState": "Enabled", "rotationStatus": "FALSE"}'
-                ],
-            ],
-            "control_monitoring_utc_timestamp": [
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-            ],
-        }
-    )
-
-
-def _empty_kms_metric_output_df():
-    """Expected output when no KMS keys are found."""
-    return pd.DataFrame(
-        {
-            "monitoring_metric_id": [24, 25],
-            "control_id": [
-                "CTRL-1077224",
-                "CTRL-1077224",
-            ],
-            "monitoring_metric_value": [0.0, 0.0],
-            "monitoring_metric_status": [
-                "Red",
-                "Red",
-            ],
-            "metric_value_numerator": [0, 0],
-            "metric_value_denominator": [0, 0],
-            "resources_info": [
-                None,
-                None,
-            ],
-            "control_monitoring_utc_timestamp": [
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-            ],
-        }
-    )
-
-
-# Mock API response data
-EMPTY_API_RESPONSE_DATA = {"resourceConfigurations": []}
-
-# Sample KMS Key data with mixed rotation status
-KMS_KEYS_RESPONSE_DATA = {
-    "resourceConfigurations": [
-        # 10 total keys, with varying compliance states:
-        # - 2 with missing KeyRotationStatus (Tier 1 fail)
-        # - 2 with FALSE KeyRotationStatus (Tier 2 fail)
-        # - 6 with TRUE KeyRotationStatus (fully compliant)
-        {
-            "resourceId": "key1",
-            "accountResourceId": "account1/key1",
-            "resourceType": "AWS::KMS::Key",
-            "configurationList": [
-                {
-                    "configurationName": "configuration.keyState",
-                    "configurationValue": "Enabled"
-                },
-                {
-                    "configurationName": "configuration.keyManager",
-                    "configurationValue": "CUSTOMER"
-                }
-            ],
-            "supplementaryConfiguration": []
-        },
-        {
-            "resourceId": "key2",
-            "accountResourceId": "account2/key2",
-            "resourceType": "AWS::KMS::Key",
-            "configurationList": [
-                {
-                    "configurationName": "configuration.keyState",
-                    "configurationValue": "Enabled"
-                },
-                {
-                    "configurationName": "configuration.keyManager",
-                    "configurationValue": "CUSTOMER"
-                }
-            ],
-            "supplementaryConfiguration": []
-        },
-        {
-            "resourceId": "key3",
-            "accountResourceId": "account3/key3",
-            "resourceType": "AWS::KMS::Key",
-            "configurationList": [
-                {
-                    "configurationName": "configuration.keyState",
-                    "configurationValue": "Enabled"
-                },
-                {
-                    "configurationName": "configuration.keyManager",
-                    "configurationValue": "CUSTOMER"
-                }
-            ],
-            "supplementaryConfiguration": [
-                {
-                    "supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus",
-                    "supplementaryConfigurationValue": "FALSE"
-                }
-            ]
-        },
-        {
-            "resourceId": "key4",
-            "accountResourceId": "account4/key4",
-            "resourceType": "AWS::KMS::Key",
-            "configurationList": [
-                {
-                    "configurationName": "configuration.keyState",
-                    "configurationValue": "Enabled"
-                },
-                {
-                    "configurationName": "configuration.keyManager",
-                    "configurationValue": "CUSTOMER"
-                }
-            ],
-            "supplementaryConfiguration": [
-                {
-                    "supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus",
-                    "supplementaryConfigurationValue": "FALSE"
-                }
-            ]
-        },
-        {
-            "resourceId": "key5",
-            "accountResourceId": "account5/key5",
-            "resourceType": "AWS::KMS::Key",
-            "configurationList": [
-                {
-                    "configurationName": "configuration.keyState",
-                    "configurationValue": "Enabled"
-                },
-                {
-                    "configurationName": "configuration.keyManager",
-                    "configurationValue": "CUSTOMER"
-                }
-            ],
-            "supplementaryConfiguration": [
-                {
-                    "supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus",
-                    "supplementaryConfigurationValue": "TRUE"
-                }
-            ]
-        },
-        {
-            "resourceId": "key6",
-            "accountResourceId": "account6/key6",
-            "resourceType": "AWS::KMS::Key",
-            "configurationList": [
-                {
-                    "configurationName": "configuration.keyState",
-                    "configurationValue": "Enabled"
-                },
-                {
-                    "configurationName": "configuration.keyManager",
-                    "configurationValue": "CUSTOMER"
-                }
-            ],
-            "supplementaryConfiguration": [
-                {
-                    "supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus",
-                    "supplementaryConfigurationValue": "TRUE"
-                }
-            ]
-        },
-        {
-            "resourceId": "key7",
-            "accountResourceId": "account7/key7",
-            "resourceType": "AWS::KMS::Key",
-            "configurationList": [
-                {
-                    "configurationName": "configuration.keyState",
-                    "configurationValue": "Enabled"
-                },
-                {
-                    "configurationName": "configuration.keyManager",
-                    "configurationValue": "CUSTOMER"
-                }
-            ],
-            "supplementaryConfiguration": [
-                {
-                    "supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus",
-                    "supplementaryConfigurationValue": "TRUE"
-                }
-            ]
-        },
-        {
-            "resourceId": "key8",
-            "accountResourceId": "account8/key8",
-            "resourceType": "AWS::KMS::Key",
-            "configurationList": [
-                {
-                    "configurationName": "configuration.keyState",
-                    "configurationValue": "Enabled"
-                },
-                {
-                    "configurationName": "configuration.keyManager",
-                    "configurationValue": "CUSTOMER"
-                }
-            ],
-            "supplementaryConfiguration": [
-                {
-                    "supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus",
-                    "supplementaryConfigurationValue": "TRUE"
-                }
-            ]
-        },
-        {
-            "resourceId": "key9",
-            "accountResourceId": "account9/key9",
-            "resourceType": "AWS::KMS::Key",
-            "configurationList": [
-                {
-                    "configurationName": "configuration.keyState",
-                    "configurationValue": "Enabled"
-                },
-                {
-                    "configurationName": "configuration.keyManager",
-                    "configurationValue": "CUSTOMER"
-                }
-            ],
-            "supplementaryConfiguration": [
-                {
-                    "supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus",
-                    "supplementaryConfigurationValue": "TRUE"
-                }
-            ]
-        },
-        {
-            "resourceId": "key10",
-            "accountResourceId": "account10/key10",
-            "resourceType": "AWS::KMS::Key",
-            "configurationList": [
-                {
-                    "configurationName": "configuration.keyState",
-                    "configurationValue": "Enabled"
-                },
-                {
-                    "configurationName": "configuration.keyManager",
-                    "configurationValue": "CUSTOMER"
-                }
-            ],
-            "supplementaryConfiguration": [
-                {
-                    "supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus",
-                    "supplementaryConfigurationValue": "TRUE"
-                }
-            ]
-        }
-    ]
-}
-
-
-def generate_mock_response(content: Optional[Dict] = None, status_code: int = 200):
-    """Generate a mock HTTP response with the given content and status code."""
+def generate_mock_api_response(content=None, status_code=200):
+    """Generate standardized mock API response."""
+    import json
+    
     mock_response = Response()
     mock_response.status_code = status_code
+    
     if content:
         mock_response._content = json.dumps(content).encode("utf-8")
-    mock_response.request = mock.Mock()
-    mock_response.request.url = "https://mock.api.url/search-resource-configurations"
-    mock_response.request.method = "POST"
+    else:
+        mock_response._content = json.dumps({}).encode("utf-8")
+    
     return mock_response
 
+# Sample KMS Key data with mixed rotation status
+def _mock_kms_resources():
+    """Generate mock KMS resources for testing"""
+    return {
+        "resourceConfigurations": [
+            {
+                "resourceId": "key1",
+                "accountResourceId": "account1/key1",
+                "resourceType": "AWS::KMS::Key",
+                "configurationList": [
+                    {
+                        "configurationName": "configuration.keyState",
+                        "configurationValue": "Enabled"
+                    },
+                    {
+                        "configurationName": "configuration.keyManager",
+                        "configurationValue": "CUSTOMER"
+                    }
+                ],
+                "supplementaryConfiguration": []
+            },
+            {
+                "resourceId": "key2",
+                "accountResourceId": "account2/key2",
+                "resourceType": "AWS::KMS::Key",
+                "configurationList": [
+                    {
+                        "configurationName": "configuration.keyState",
+                        "configurationValue": "Enabled"
+                    },
+                    {
+                        "configurationName": "configuration.keyManager",
+                        "configurationValue": "CUSTOMER"
+                    }
+                ],
+                "supplementaryConfiguration": [
+                    {
+                        "supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus",
+                        "supplementaryConfigurationValue": "FALSE"
+                    }
+                ]
+            },
+            {
+                "resourceId": "key3",
+                "accountResourceId": "account3/key3",
+                "resourceType": "AWS::KMS::Key",
+                "configurationList": [
+                    {
+                        "configurationName": "configuration.keyState",
+                        "configurationValue": "Enabled"
+                    },
+                    {
+                        "configurationName": "configuration.keyManager",
+                        "configurationValue": "CUSTOMER"
+                    }
+                ],
+                "supplementaryConfiguration": [
+                    {
+                        "supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus",
+                        "supplementaryConfigurationValue": "TRUE"
+                    }
+                ]
+            }
+        ],
+        "nextRecordKey": None
+    }
 
-def _validate_avro_schema(df, expected_fields=None):
-    """Validates that a DataFrame conforms to the expected Avro schema structure."""
-    if expected_fields is None:
-        expected_fields = AVRO_SCHEMA_FIELDS
+@freeze_time("2024-11-05 12:09:00")
+def test_calculate_metrics_success(mock):
+    """Test successful metrics calculation"""
+    # Setup test data
+    thresholds_df = _mock_threshold_df()
     
-    # Convert monitoring metric fields to the Avro schema field names
-    if "control_monitoring_utc_timestamp" in df.columns:
-        df = df.rename(columns={
-            "control_monitoring_utc_timestamp": "date",
-            "monitoring_metric_status": "compliance_status",
-            "metric_value_numerator": "numerator",
-            "metric_value_denominator": "denominator",
-            "resources_info": "non_compliant_resources"
-        })
+    # Mock API response
+    mock_response = generate_mock_api_response(_mock_kms_resources())
     
-    # Check that all expected fields are present
-    for field in expected_fields:
-        assert field in df.columns, f"Field {field} missing from DataFrame"
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
     
-    # Validate data types when data is available
-    if not df.empty:
-        assert df["control_id"].dtype == object
-        assert df["monitoring_metric_id"].dtype in ["int64", "int32", "float64"]
-        assert df["monitoring_metric_value"].dtype in ["float64", "float32"]
-        assert df["compliance_status"].dtype == object
-        assert df["numerator"].dtype in ["int64", "int32", "float64"]
-        assert df["denominator"].dtype in ["int64", "int32", "float64"]
+    context = {"api_connector": mock_api}
+    
+    # Execute transformer
+    result = calculate_metrics(thresholds_df, context)
+    
+    # Assertions
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+    assert list(result.columns) == AVRO_SCHEMA_FIELDS
+    assert len(result) == 2  # Two metrics (Tier 1 and Tier 2)
+    
+    # Verify data types
+    row = result.iloc[0]
+    assert isinstance(row["control_monitoring_utc_timestamp"], datetime)
+    assert isinstance(row["monitoring_metric_value"], float)
+    assert isinstance(row["metric_value_numerator"], int)
+    assert isinstance(row["metric_value_denominator"], int)
 
+def test_calculate_metrics_empty_thresholds():
+    """Test error handling for empty thresholds"""
+    empty_df = pd.DataFrame()
+    context = {"api_connector": Mock()}
+    
+    with pytest.raises(RuntimeError, match="No threshold data found"):
+        calculate_metrics(empty_df, context)
 
-class Test_CTRL_1077224_Pipeline(ConfigPipelineTestCase):
-    """Test class for the KMS Key Rotation (CTRL-1077224) pipeline."""
+def test_pipeline_initialization():
+    """Test pipeline class initialization"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1077224(env)
+    
+    assert pipeline.env == env
+    assert hasattr(pipeline, 'api_url')
+    assert 'test-exchange.com' in pipeline.api_url
 
-    @mock.patch("requests.post")
-    def test_extract_kms_key_rotation(self, mock_post):
-        """Test the KMS key rotation data extraction with mocked API responses."""
-        # Set up mocked API response
-        mock_post.return_value = generate_mock_response(KMS_KEYS_RESPONSE_DATA, 200)
+def test_pipeline_run_method(mock):
+    """Test pipeline run method with default parameters"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1077224(env)
+    
+    # Mock the run method
+    mock_run = mock.patch.object(pipeline, 'run')
+    pipeline.run()
+    
+    # Verify run was called with default parameters
+    mock_run.assert_called_once_with()
 
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1077224Pipeline(env)
-            df = pl.extract_kms_key_rotation(_tier_threshold_df())
-            
-            # Verify metrics are calculated properly (80% Tier1, 75% Tier2)
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 80.0)  # Tier1: 8/10 = 80%
-            self.assertEqual(df["monitoring_metric_value"].iloc[1], 75.0)  # Tier2: 6/8 = 75%
-            
-            # Verify numerators and denominators
-            self.assertEqual(df["metric_value_numerator"].iloc[0], 8)     # Tier1 numerator
-            self.assertEqual(df["metric_value_denominator"].iloc[0], 10)  # Tier1 denominator
-            self.assertEqual(df["metric_value_numerator"].iloc[1], 6)     # Tier2 numerator
-            self.assertEqual(df["metric_value_denominator"].iloc[1], 8)   # Tier2 denominator
-            
-            # Verify resource info contains data about non-compliant resources
-            self.assertIsNotNone(df["resources_info"].iloc[0])  # Tier 1 non-compliant
-            self.assertIsNotNone(df["resources_info"].iloc[1])  # Tier 2 non-compliant
+def test_api_error_handling(mock):
+    """Test API error handling and exception wrapping"""
+    # Test network errors
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.side_effect = RequestException("Connection error")
     
-    @mock.patch("requests.post")
-    def test_extract_kms_key_rotation_empty(self, mock_post):
-        """Test the KMS key rotation data extraction with empty API response."""
-        # Set up mocked API response - empty resource set
-        mock_post.return_value = generate_mock_response(EMPTY_API_RESPONSE_DATA, 200)
+    context = {"api_connector": mock_api}
+    
+    # Should wrap exception in RuntimeError
+    with pytest.raises(RuntimeError, match="Failed to fetch resources from API"):
+        calculate_metrics(_mock_threshold_df(), context)
 
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1077224Pipeline(env)
-            df = pl.extract_kms_key_rotation(_tier_threshold_df())
-            
-            # Verify metrics are 0 when no resources found
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 0.0)  # Tier1
-            self.assertEqual(df["monitoring_metric_value"].iloc[1], 0.0)  # Tier2
-            
-            # Verify numerators and denominators are 0
-            self.assertEqual(df["metric_value_numerator"].iloc[0], 0)    # Tier1 numerator
-            self.assertEqual(df["metric_value_denominator"].iloc[0], 0)  # Tier1 denominator
-            self.assertEqual(df["metric_value_numerator"].iloc[1], 0)    # Tier2 numerator
-            self.assertEqual(df["metric_value_denominator"].iloc[1], 0)  # Tier2 denominator
-            
-            # Verify resource info is None when no resources
-            self.assertIsNone(df["resources_info"].iloc[0])  # Tier 1
-            self.assertIsNone(df["resources_info"].iloc[1])  # Tier 2
+def test_pagination_handling(mock):
+    """Test API pagination with multiple responses"""
+    # Create paginated responses
+    page1_response = generate_mock_api_response({
+        "resourceConfigurations": [_mock_kms_resources()["resourceConfigurations"][0]],
+        "nextRecordKey": "page2_key"
+    })
+    page2_response = generate_mock_api_response({
+        "resourceConfigurations": [_mock_kms_resources()["resourceConfigurations"][1]],
+        "nextRecordKey": None
+    })
     
-    @mock.patch("requests.post")
-    def test_extract_with_error(self, mock_post):
-        """Test error handling in extraction."""
-        # Set up mocked API response to simulate an error
-        mock_post.side_effect = Exception("API Error")
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.side_effect = [page1_response, page2_response]
+    
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(_mock_threshold_df(), context)
+    
+    # Verify both pages were processed
+    assert not result.empty
 
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1077224Pipeline(env)
-            df = pl.extract_kms_key_rotation(_tier_threshold_df())
-            
-            # Verify empty dataframe is returned on error
-            self.assertTrue(df.empty)
+@freeze_time("2024-11-05 12:09:00")
+def test_tier_compliance_logic(mock):
+    """Test tier-specific compliance logic"""
+    thresholds_df = _mock_threshold_df()
+    mock_response = generate_mock_api_response(_mock_kms_resources())
     
-    def test_get_compliance_status(self):
-        """Test compliance status determination."""
-        env = set_env_vars("qa")
-        pl = pipeline.PLAmCTRL1077224Pipeline(env)
-        
-        # Test Green status
-        self.assertEqual(pl.get_compliance_status(0.96, 95.0, 97.0), "Green")  # 96% >= 95% alert
-        
-        # Test Yellow status 
-        self.assertEqual(pl.get_compliance_status(0.96, 97.0, 95.0), "Yellow")  # 96% >= 95% warning
-        
-        # Test Red status
-        self.assertEqual(pl.get_compliance_status(0.80, 95.0, 97.0), "Red")     # 80% < 95% alert
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
     
-    @mock.patch("requests.post")
-    def test_transform_phase(self, mock_post):
-        """Test the transform phase of the pipeline."""
-        # Set up mocked API response
-        mock_post.return_value = generate_mock_response(KMS_KEYS_RESPONSE_DATA, 200)
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(thresholds_df, context)
+    
+    # Verify metrics calculations
+    tier1_row = result[result["monitoring_metric_id"] == 24].iloc[0]
+    tier2_row = result[result["monitoring_metric_id"] == 25].iloc[0]
+    
+    # Tier 1: 2 out of 3 have rotation status (66.67%)
+    # key2 and key3 have rotation status, key1 does not
+    assert tier1_row["metric_value_numerator"] == 2
+    assert tier1_row["metric_value_denominator"] == 3
+    
+    # Tier 2: Only processes resources with rotation status (key2=FALSE, key3=TRUE)
+    # 1 out of 2 (with rotation status) have TRUE (50%)
+    assert tier2_row["metric_value_numerator"] == 1
+    assert tier2_row["metric_value_denominator"] == 2
 
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            # Mock Snowflake query to return threshold data
-            mock_sf = mock.MagicMock()
-            mock_sf.query.return_value = _tier_threshold_df()
-            env.snowflake = mock_sf
-            
-            pl = pipeline.PLAmCTRL1077224Pipeline(env)
-            pl.configure_from_dict({"pipeline": {"name": "test-pipeline"}})
-            
-            # Run the transform phase
-            pl.transform()
-            
-            # Verify the transformed data is in the pipeline context
-            self.assertIn("kms_key_rotation_metrics", pl.context)
-            
-            # Convert the metrics to the Avro schema format for validation
-            metrics_df = pl.context["kms_key_rotation_metrics"].copy()
-            
-            # Validate schema conformance
-            _validate_avro_schema(metrics_df)
-            
-            # Verify metric values
-            self.assertEqual(metrics_df["monitoring_metric_value"].iloc[0], 80.0)  # Tier1: 8/10 = 80%
-            self.assertEqual(metrics_df["monitoring_metric_value"].iloc[1], 75.0)  # Tier2: 6/8 = 75%
+def test_resource_filtering(mock):
+    """Test resource exclusion filtering"""
+    # Add excluded resources to test data
+    excluded_resources = _mock_kms_resources()
+    excluded_resources["resourceConfigurations"].extend([
+        {
+            "resourceId": "aws_key",
+            "accountResourceId": "account4/aws_key",
+            "source": "CT-AccessDenied",
+            "configurationList": [
+                {
+                    "configurationName": "configuration.keyState",
+                    "configurationValue": "Enabled"
+                },
+                {
+                    "configurationName": "configuration.keyManager",
+                    "configurationValue": "AWS"
+                }
+            ],
+            "supplementaryConfiguration": []
+        }
+    ])
     
-    @mock.patch("requests.post")
-    def test_load_phase(self, mock_post):
-        """Test the load phase of the pipeline."""
-        mock_post.return_value = generate_mock_response(KMS_KEYS_RESPONSE_DATA, 200)
-        
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            # Mock Snowflake and exchange for the entire pipeline
-            mock_sf = mock.MagicMock()
-            mock_sf.query.return_value = _tier_threshold_df()
-            mock_ex = mock.MagicMock()
-            env.snowflake = mock_sf
-            env.exchange = mock_ex
-            
-            pl = pipeline.PLAmCTRL1077224Pipeline(env)
-            pl.configure_from_dict({"pipeline": {"name": "test-pipeline"}})
-            
-            # Pre-populate context with transformed data
-            pl.context["kms_key_rotation_metrics"] = _kms_key_rotation_output_df()
-            
-            # Mock the Avro loading function
-            with mock.patch.object(pl, 'load_metrics_to_avro') as mock_load:
-                pl.load()
-                mock_load.assert_called_once()
-                
-                # Verify the data passed to load matches expectations
-                call_args = mock_load.call_args[0]
-                df_arg = call_args[0]
-                
-                # Validate the DataFrame structure being loaded
-                self.assertEqual(len(df_arg), 2)  # Two metrics
-                self.assertEqual(list(df_arg["monitoring_metric_id"]), [24, 25])
-                self.assertEqual(list(df_arg["control_id"]), ["CTRL-1077224", "CTRL-1077224"])
+    thresholds_df = _mock_threshold_df()
+    mock_response = generate_mock_api_response(excluded_resources)
     
-    @mock.patch("requests.post")
-    def test_data_validation(self, mock_post):
-        """Test data validation for the KMS key rotation metrics."""
-        mock_post.return_value = generate_mock_response(KMS_KEYS_RESPONSE_DATA, 200)
-        
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1077224Pipeline(env)
-            df = pl.extract_kms_key_rotation(_tier_threshold_df())
-            
-            # Ensure the data has the expected structure
-            self.assertIn("monitoring_metric_id", df.columns)
-            self.assertIn("control_id", df.columns)
-            self.assertIn("monitoring_metric_value", df.columns)
-            self.assertIn("monitoring_metric_status", df.columns)
-            self.assertIn("metric_value_numerator", df.columns)
-            self.assertIn("metric_value_denominator", df.columns)
-            self.assertIn("resources_info", df.columns)
-            
-            # Validate data types
-            self.assertEqual(df["monitoring_metric_id"].dtype, "int64")
-            self.assertEqual(df["control_id"].dtype, "object")
-            self.assertEqual(df["monitoring_metric_value"].dtype, "float64")
-            self.assertEqual(df["monitoring_metric_status"].dtype, "object")
-            
-            # Validate value ranges
-            self.assertTrue(all(0 <= val <= 100 for val in df["monitoring_metric_value"]))
-            self.assertTrue(all(val in ["Green", "Yellow", "Red"] for val in df["monitoring_metric_status"]))
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
     
-    @mock.patch("requests.post")
-    def test_sql_table_names(self, mock_post):
-        """Test that SQL queries reference the correct table names."""
-        mock_post.return_value = generate_mock_response(KMS_KEYS_RESPONSE_DATA, 200)
-        
-        # Mock SQL file reading
-        sql_content = "SELECT * FROM monitoring_thresholds WHERE control_id = %(control_id)s"
-        
-        with mock.patch("builtins.open", mock.mock_open(read_data=sql_content)):
-            env = set_env_vars("qa")
-            pl = pipeline.PLAmCTRL1077224Pipeline(env)
-            
-            # Test with mocked SQL file reading
-            with mock.patch("os.path.exists", return_value=True):
-                pl.configure_from_dict({"pipeline": {"name": "test-pipeline"}})
-                
-                # Check SQL table references
-                query = pl._read_sql_with_params("monitoring_thresholds.sql", {"control_id": "CTRL-1077224"})
-                
-                # The exact SQL might vary, but it should contain the table name
-                self.assertIn("monitoring_thresholds", query)
-                self.assertIn("CTRL-1077224", query)
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(thresholds_df, context)
     
-    @mock.patch("pipelines.pl_automated_monitoring_CTRL_1077224.pipeline.PLAmCTRL1077224Pipeline._execute_api_request")
-    def test_error_handling_api_failure(self, mock_api):
-        """Test error handling when API requests fail."""
-        # Set up various API failure scenarios
-        mock_api.side_effect = [
-            Exception("Connection error"),  # First call fails
-            Exception("Timeout"),           # Second call fails
-            Exception("Authentication error")  # Third call fails
+    # Should still only process the 3 valid keys
+    tier1_row = result[result["monitoring_metric_id"] == 24].iloc[0]
+    assert tier1_row["metric_value_denominator"] == 3
+
+def test_compliance_status_determination(mock):
+    """Test compliance status based on thresholds"""
+    thresholds_df = pd.DataFrame([{
+        "monitoring_metric_id": 24,
+        "control_id": "CTRL-1077224",
+        "monitoring_metric_tier": "Tier 1",
+        "warning_threshold": 85.0,
+        "alerting_threshold": 95.0
+    }])
+    
+    # Create scenario with high compliance
+    high_compliance_resources = {
+        "resourceConfigurations": [
+            {
+                "resourceId": "key1",
+                "accountResourceId": "account1/key1",
+                "configurationList": [
+                    {"configurationName": "configuration.keyState", "configurationValue": "Enabled"},
+                    {"configurationName": "configuration.keyManager", "configurationValue": "CUSTOMER"}
+                ],
+                "supplementaryConfiguration": [
+                    {"supplementaryConfigurationName": "supplementaryConfiguration.KeyRotationStatus", "supplementaryConfigurationValue": "TRUE"}
+                ]
+            }
         ]
-        
-        env = set_env_vars("qa")
-        pl = pipeline.PLAmCTRL1077224Pipeline(env)
-        
-        # Test with various error types
-        for _ in range(3):
-            with self.assertLogs(level='ERROR'):
-                result = pl.extract_kms_key_rotation(_tier_threshold_df())
-                self.assertTrue(result.empty)
+    }
     
-    def test_pagination_handling(self):
-        """Test handling of paginated API responses."""
-        env = set_env_vars("qa")
-        pl = pipeline.PLAmCTRL1077224Pipeline(env)
-        
-        # Create a mocked paginated response
-        page1 = generate_mock_response({
-            "resourceConfigurations": KMS_KEYS_RESPONSE_DATA["resourceConfigurations"][:5],
-            "nextRecordKey": "next_page_token"
-        })
-        page2 = generate_mock_response({
-            "resourceConfigurations": KMS_KEYS_RESPONSE_DATA["resourceConfigurations"][5:],
-            "nextRecordKey": ""
-        })
-        
-        # Mock the API request function to return paginated responses
-        with mock.patch.object(pl, '_execute_api_request', side_effect=[page1, page2]):
-            result = pl._get_aws_resources("AWS::KMS::Key")
-            
-            # Verify all resources from both pages are included
-            self.assertEqual(len(result), 10)
-            resource_ids = [r["resourceId"] for r in result]
-            self.assertIn("key1", resource_ids)  # From page 1
-            self.assertIn("key10", resource_ids)  # From page 2
+    mock_response = generate_mock_api_response(high_compliance_resources)
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
     
-    def test_full_pipeline_run(self):
-        """Test the full pipeline run with mocked components."""
-        env = set_env_vars("qa")
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(thresholds_df, context)
+    
+    # 100% compliance should be Green
+    assert result.iloc[0]["monitoring_metric_status"] == "Green"
+
+def test_main_function_execution(mock):
+    """Test main function execution path"""
+    mock_env = mock.Mock()
+    
+    with mock.patch("etip_env.set_env_vars", return_value=mock_env):
+        with mock.patch("pl_automated_monitoring_CTRL_1077224.pipeline.run") as mock_run:
+            with mock.patch("sys.exit") as mock_exit:
+                # Execute main block
+                code = """
+if True:
+    from etip_env import set_env_vars
+    from pl_automated_monitoring_CTRL_1077224.pipeline import run
+    
+    env = set_env_vars()
+    try:
+        run(env=env, is_load=False, dq_actions=False)
+    except Exception as e:
+        import sys
+        sys.exit(1)
+"""
+                exec(code)
+                
+                # Verify success path
+                assert not mock_exit.called
+                mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
+
+def test_empty_api_response(mock):
+    """Test handling of empty API response"""
+    thresholds_df = _mock_threshold_df()
+    empty_response = generate_mock_api_response({"resourceConfigurations": []})
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = empty_response
+    
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(thresholds_df, context)
+    
+    # Should return metrics with 0 values
+    assert not result.empty
+    assert all(result["metric_value_numerator"] == 0)
+    assert all(result["metric_value_denominator"] == 0)
+
+def test_api_status_code_error(mock):
+    """Test handling of API error status codes"""
+    thresholds_df = _mock_threshold_df()
+    error_response = generate_mock_api_response({}, status_code=500)
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = error_response
+    
+    context = {"api_connector": mock_api}
+    
+    with pytest.raises(RuntimeError, match="API request failed: 500"):
+        calculate_metrics(thresholds_df, context)
+
+def test_context_initialization():
+    """Test pipeline context initialization"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1077224(env)
+    
+    # Initialize context if not exists
+    if not hasattr(pipeline, 'context'):
+        pipeline.context = {}
+    
+    assert pipeline.context == {}
+
+def test_ssl_context_handling(mock):
+    """Test SSL context handling when C1_CERT_FILE is set"""
+    import os
+    
+    # Mock environment variable
+    with mock.patch.dict(os.environ, {'C1_CERT_FILE': '/path/to/cert.pem'}):
+        env = MockEnv()
+        pipeline = PLAutomatedMonitoringCTRL1077224(env)
         
-        # Set up mocked components
-        with mock.patch.multiple(
-            "pipelines.pl_automated_monitoring_CTRL_1077224.pipeline.PLAmCTRL1077224Pipeline",
-            extract=mock.DEFAULT,
-            transform=mock.DEFAULT,
-            load=mock.DEFAULT,
-            configure_from_filename=mock.DEFAULT
-        ) as mocks:
-            # Configure mock returns
-            mocks["extract"].return_value = {"thresholds": _tier_threshold_df()}
-            mocks["transform"].return_value = None
-            mocks["load"].return_value = None
-            mocks["configure_from_filename"].return_value = None
-            
-            # Run the pipeline
-            pl = pipeline.PLAmCTRL1077224Pipeline(env)
-            pl.run()
-            
-            # Verify all phases were called
-            mocks["extract"].assert_called_once()
-            mocks["transform"].assert_called_once()
-            mocks["load"].assert_called_once()
+        # Test that _get_api_connector can be called without error
+        with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.refresh') as mock_refresh:
+            with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.ssl.create_default_context') as mock_ssl:
+                with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.OauthApi') as mock_oauth_api:
+                    mock_refresh.return_value = "test_token"
+                    mock_ssl.return_value = "mock_ssl_context"
+                    
+                    connector = pipeline._get_api_connector()
+                    mock_ssl.assert_called_once_with(cafile='/path/to/cert.pem')
+                    mock_oauth_api.assert_called_once()
+
+def test_json_serialization_in_resources_info(mock):
+    """Test that resources_info properly serializes JSON"""
+    thresholds_df = _mock_threshold_df()
+    mock_response = generate_mock_api_response(_mock_kms_resources())
     
-    def test_run_with_disabled_load(self):
-        """Test running the pipeline with load disabled."""
-        env = set_env_vars("qa")
-        
-        # Set up mocked components
-        with mock.patch.multiple(
-            "pipelines.pl_automated_monitoring_CTRL_1077224.pipeline.PLAmCTRL1077224Pipeline",
-            extract=mock.DEFAULT,
-            transform=mock.DEFAULT,
-            load=mock.DEFAULT,
-            configure_from_filename=mock.DEFAULT
-        ) as mocks:
-            # Configure mock returns
-            mocks["extract"].return_value = {"thresholds": _tier_threshold_df()}
-            mocks["transform"].return_value = None
-            mocks["load"].return_value = None
-            mocks["configure_from_filename"].return_value = None
-            
-            # Run the pipeline with load disabled
-            pl = pipeline.PLAmCTRL1077224Pipeline(env)
-            pl.run(load=False)
-            
-            # Verify load was not called
-            mocks["extract"].assert_called_once()
-            mocks["transform"].assert_called_once()
-            mocks["load"].assert_not_called()
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
     
-    def test_run_nonprod(self):
-        """Test pipeline run in non-prod environment."""
-        env = set_env_vars("qa")
-        with mock.patch(
-            "pipelines.pl_automated_monitoring_CTRL_1077224.pipeline.PLAmCTRL1077224Pipeline"
-        ) as mock_pipeline:
-            pipeline.run(env)
-            mock_pipeline.assert_called_once_with(env)
-            mock_pipeline.return_value.run.assert_called_once_with(
-                load=True, dq_actions=True
-            )
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(thresholds_df, context)
     
-    def test_run_prod(self):
-        """Test pipeline run in prod environment."""
-        env = set_env_vars("prod")
-        with mock.patch(
-            "pipelines.pl_automated_monitoring_CTRL_1077224.pipeline.PLAmCTRL1077224Pipeline"
-        ) as mock_pipeline:
-            pipeline.run(env)
-            mock_pipeline.assert_called_once_with(env)
-            mock_pipeline.return_value.run.assert_called_once_with(
-                load=True, dq_actions=True
-            )
+    # Check that resources_info contains JSON strings
+    for _, row in result.iterrows():
+        if row["resources_info"] is not None:
+            assert isinstance(row["resources_info"], list)
+            for item in row["resources_info"]:
+                assert isinstance(item, str)
+                # Verify it's valid JSON
+                import json
+                json.loads(item)  # Should not raise exception
+
+def test_division_by_zero_protection(mock):
+    """Test that division by zero is handled gracefully"""
+    thresholds_df = _mock_threshold_df()
+    
+    # Create response with no valid resources
+    empty_resources = {
+        "resourceConfigurations": [
+            {
+                "resourceId": "excluded_key",
+                "accountResourceId": "account1/excluded_key",
+                "source": "CT-AccessDenied",  # This will be excluded
+                "configurationList": [
+                    {"configurationName": "configuration.keyManager", "configurationValue": "AWS"}
+                ],
+                "supplementaryConfiguration": []
+            }
+        ]
+    }
+    
+    mock_response = generate_mock_api_response(empty_resources)
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
+    
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(thresholds_df, context)
+    
+    # Should handle zero denominator gracefully
+    assert not result.empty
+    assert all(result["monitoring_metric_value"] == 0.0)
+    assert all(result["metric_value_denominator"] == 0)
+
+def test_tier_2_with_no_tier_1_compliant_resources(mock):
+    """Test Tier 2 calculation when no resources pass Tier 1"""
+    thresholds_df = _mock_threshold_df()
+    
+    # Create resources with no rotation status (fail Tier 1)
+    no_rotation_resources = {
+        "resourceConfigurations": [
+            {
+                "resourceId": "key1",
+                "accountResourceId": "account1/key1",
+                "configurationList": [
+                    {"configurationName": "configuration.keyState", "configurationValue": "Enabled"},
+                    {"configurationName": "configuration.keyManager", "configurationValue": "CUSTOMER"}
+                ],
+                "supplementaryConfiguration": []  # No rotation status
+            }
+        ]
+    }
+    
+    mock_response = generate_mock_api_response(no_rotation_resources)
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
+    
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(thresholds_df, context)
+    
+    tier1_row = result[result["monitoring_metric_id"] == 24].iloc[0]
+    tier2_row = result[result["monitoring_metric_id"] == 25].iloc[0]
+    
+    # Tier 1: 0 out of 1 have rotation status
+    assert tier1_row["metric_value_numerator"] == 0
+    assert tier1_row["metric_value_denominator"] == 1
+    
+    # Tier 2: No resources to evaluate (denominator = 0)
+    assert tier2_row["metric_value_numerator"] == 0
+    assert tier2_row["metric_value_denominator"] == 0

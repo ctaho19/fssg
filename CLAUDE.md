@@ -51,10 +51,12 @@ from datetime import datetime
 import json
 import ssl
 import os
-from pipeline_framework import ConfigPipeline, transformer
-from pipeline_framework.env import Env
-from pipeline_framework.connectors.oauth_api import OauthApi
-from pipeline_framework.connectors.auth import refresh
+from config_pipeline import ConfigPipeline
+from connectors.api import OauthApi
+from connectors.ca_certs import C1_CERT_FILE
+from connectors.exchange.oauth_token import refresh
+from etip_env import Env
+from transform_library import transformer
 
 class PLAutomatedMonitoring[ControlName](ConfigPipeline):
     def __init__(self, env: Env) -> None:
@@ -73,8 +75,8 @@ class PLAutomatedMonitoring[ControlName](ConfigPipeline):
         
         # Create SSL context if certificate file exists
         ssl_context = None
-        if os.environ.get("C1_CERT_FILE"):
-            ssl_context = ssl.create_default_context(cafile=os.environ["C1_CERT_FILE"])
+        if C1_CERT_FILE:
+            ssl_context = ssl.create_default_context(cafile=C1_CERT_FILE)
         
         return OauthApi(
             url=self.api_url,
@@ -325,6 +327,8 @@ egress_validation:
 #### Production SQL (`sql/monitoring_thresholds.sql`)
 
 ```sql
+-- sqlfluff:dialect:snowflake
+-- sqlfluff:templater:placeholder:param_style:pyformat
 select
     monitoring_metric_id,
     control_id,
@@ -346,6 +350,8 @@ where
 #### QA SQL (`sql/monitoring_thresholds_qa.sql`)
 
 ```sql
+-- sqlfluff:dialect:snowflake
+-- sqlfluff:templater:placeholder:param_style:pyformat
 select
     monitoring_metric_id,
     control_id,

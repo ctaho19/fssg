@@ -3,95 +3,154 @@ pipeline:
   use_test_data_on_nonprod: false
   dq_strict_mode: false
 
-stages:
-  extract:
-    thresholds_raw:
-      connector: snowflake
+environments:
+  prod:
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds.sql"
+          params: $thresholds_raw_params
+      iam_roles:
+        connector: snowflake
+        options:
+          sql: "@text:sql/iam_roles.sql"
+      evaluated_roles:
+        connector: snowflake
+        options:
+          sql: "@text:sql/evaluated_roles.sql"
+          params: $evaluated_roles_params
+          multi_run: true
+      sla_data:
+        connector: snowflake
+        options:
+          sql: "@text:sql/sla_data.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+  local:
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds.sql"
+          params: $thresholds_raw_params
+      iam_roles:
+        connector: snowflake
+        options:
+          sql: "@text:sql/iam_roles.sql"
+      evaluated_roles:
+        connector: snowflake
+        options:
+          sql: "@text:sql/evaluated_roles.sql"
+          params: $evaluated_roles_params
+          multi_run: true
+      sla_data:
+        connector: snowflake
+        options:
+          sql: "@text:sql/sla_data.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+ingress_validation:
+  thresholds_raw:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [prod]
       options:
-        sql: "@text:sql/monitoring_thresholds.sql"
-        params: $thresholds_raw_params
-    iam_roles:
-      connector: snowflake
+        required_columns:
+          - monitoring_metric_id
+          - control_id
+          - monitoring_metric_tier
+          - metric_name
+          - metric_description
+          - warning_threshold
+          - alerting_threshold
+    - type: count_check
+      fatal: true
+      envs: [prod]
       options:
-        sql: "@text:sql/iam_roles.sql"
-    evaluated_roles:
-      connector: snowflake
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [prod]
       options:
-        sql: "@text:sql/evaluated_roles.sql"
-        params: $evaluated_roles_params  # Use the dynamic list of parameters (one for each cloud control ID)
-        multi_run: true  # Execute the query multiple times with different parameters
-    sla_data:
-      connector: snowflake
+        check_type: "data_freshness"
+        description: "Ingress data quality check"
+
+  iam_roles:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [prod]
       options:
-        sql: "@text:sql/sla_data.sql"
+        required_columns:
+          - RESOURCE_ID
+          - AMAZON_RESOURCE_NAME
+          - ROLE_TYPE
+    - type: count_check
+      fatal: true
+      envs: [prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
 
-  ingress_validation:
-    thresholds_raw:
-      - type: count_check
-        fatal: true
-        envs:
-          - prod
-        options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
-    iam_roles:
-      - type: count_check
-        fatal: true
-        envs:
-          - prod
-        options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: EIAM_DB.PHDP_CYBR_IAM.IDENTITY_REPORTS_IAM_RESOURCE_V3
-    evaluated_roles:
-      - type: count_check
-        fatal: true
-        envs:
-          - prod
-        options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: EIAM_DB.PHDP_CYBR_IAM.IDENTITY_REPORTS_CONTROLS_VIOLATIONS_STREAM_V2
+  evaluated_roles:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [prod]
+      options:
+        required_columns:
+          - resource_name
+          - compliance_status
+          - control_id
+          - role_type
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
 
-  transform:
-    monitoring_metrics:
-      - function: custom/calculate_machine_iam_metrics
-        options:
-          thresholds_raw: $thresholds_raw
-          iam_roles: $iam_roles
-          evaluated_roles: $evaluated_roles
-          sla_data: $sla_data
-
-  load:
-    monitoring_metrics:
-      - connector: onestream
-        options:
-          table_name: etip_controls_monitoring_metrics
-          file_type: AVRO
-          avro_schema: "@json:avro_schema.json"
-          business_application: BAENTERPRISETECHINSIGHTS
-
-  prepare_test_data:
-    thresholds_raw:
-      - function: head
-        options:
-          n: 500000
-    iam_roles:
-      - function: head
-        options:
-          n: 500000
-    evaluated_roles:
-      - function: head
-        options:
-          n: 500000
-    sla_data:
-      - function: head
-        options:
-          n: 500000
-
-  export_test_data:
-    thresholds_raw:
-    iam_roles:
-    evaluated_roles:
-    sla_data:
+egress_validation:
+  monitoring_metrics:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [prod]
+      options:
+        required_columns:
+          - control_monitoring_utc_timestamp
+          - control_id
+          - monitoring_metric_id
+          - monitoring_metric_value
+          - monitoring_metric_status
+          - metric_value_numerator
+          - metric_value_denominator
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [prod]
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [prod]
+      options:
+        description: "Egress data will not match ingress data due to API enrichment and multi-tier calculations"

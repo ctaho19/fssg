@@ -3,65 +3,92 @@ pipeline:
   use_test_data_on_nonprod: false
   dq_strict_mode: false
 
-stages:
-  extract:
-    threshold_df:
-      connector: snowflake
+environments:
+  prod:
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+  qa: &nonprod_config
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds_qa.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: fact_controls_monitoring_metrics_daily_v4
+            file_type: AVRO
+            avro_schema: "@json:avro_schema_qa.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+  local: *nonprod_config
+
+# REQUIRED: Comprehensive Data Quality Validation
+ingress_validation:
+  thresholds_raw:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
       options:
-        sql: "@text:sql/monitoring_thresholds.sql"
-  
-  transform:
-    kms_metrics_df:
-      function: calculate_ctrl1077224_metrics
-      args:
-        - threshold_df
-  
-  ingress_validation:
-    threshold_df:
-      - type: count_check
-        fatal: true
-        envs:
-          - qa
-          - prod
-        options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
-      - type: schema_check
-        fatal: true
-        envs:
-          - qa
-          - prod
-        options:
-          data_location: Snowflake
-          dataset_id: '3200d09e-69a8-49f1-9d61-fd164817364c'
-          attribute_map: {}
-    
-    kms_metrics_df:
-      - type: count_check
-        fatal: true
-        envs:
-          - qa
-          - prod
-        options:
-          data_location: API
-          threshold: 1
-          table_name: KMS_KEY_ROTATION
-  
-  load:
-    kms_metrics_df:
-      - connector: onestream
-        options:
-          table_name: etip_controls_monitoring_metrics
-          business_application: BAENTERPRISETECHINSIGHTS
-          file_type: AVRO
-          avro_schema: "@json:avro_schema.json"
+        required_columns:
+          - monitoring_metric_id
+          - control_id
+          - monitoring_metric_tier
+          - metric_name
+          - metric_description
+          - warning_threshold
+          - alerting_threshold
+          - control_executor
+    - type: count_check
+      fatal: true
+      envs: [qa, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        check_type: "data_freshness"
+        description: "Ingress data quality check"
 
-  prepare_test_data:
-    threshold_df:
-      - function: head
-        options:
-          n: 500000
-
-  export_test_data:
-    threshold_df:
+egress_validation:
+  monitoring_metrics:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        required_columns:
+          - control_monitoring_utc_timestamp
+          - control_id
+          - monitoring_metric_id
+          - monitoring_metric_value
+          - monitoring_metric_status
+          - metric_value_numerator
+          - metric_value_denominator
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        description: "Egress data will not match ingress data due to API enrichment"

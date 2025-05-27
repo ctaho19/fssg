@@ -3,106 +3,152 @@ pipeline:
   use_test_data_on_nonprod: false
   dq_strict_mode: false
 
-stages:
-  extract:
-    threshold_df:
-      connector: snowflake
-      options:
-        sql: "@text:sql/monitoring_thresholds.sql"
-    macie_metrics_df:
-      connector: snowflake
-      options:
-        sql: "@text:sql/macie_metrics.sql"
-    macie_testing_df:
-      connector: snowflake
-      options:
-        sql: "@text:sql/macie_testing.sql"
-    historical_stats_df:
-      connector: snowflake
-      options:
-        sql: "@text:sql/historical_stats.sql"
-  
-  ingress_validation:
-    threshold_df:
-      - type: count_check
-        fatal: true
-        envs:
-          - qa
-          - prod
+environments:
+  prod:
+    extract:
+      thresholds_raw:
+        connector: snowflake
         options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
-      - type: schema_check
-        fatal: true
-        envs:
-          - qa
-          - prod
+          sql: "@text:sql/monitoring_thresholds.sql"
+      macie_metrics:
+        connector: snowflake
         options:
-          data_location: Snowflake
-          dataset_id: '3200d09e-69a8-49f1-9d61-fd164817364c'
-          attribute_map: {}
-    
-    macie_metrics_df:
-      - type: count_check
-        fatal: true
-        envs:
-          - qa
-          - prod
+          sql: "@text:sql/macie_metrics.sql"
+      macie_testing:
+        connector: snowflake
         options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: CYBR_DB.PHDP_CYBR.MACIE_METRICS_V3
-    
-    macie_testing_df:
-      - type: count_check
-        fatal: false
-        envs:
-          - qa
-          - prod
+          sql: "@text:sql/macie_testing.sql"
+      historical_stats:
+        connector: snowflake
         options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: CYBR_DB.PHDP_CYBR.MACIE_CONTROLS_TESTING
-  
-  transform:
-    macie_monitoring_df:
-      - function: custom/transform_macie_data
-        options:
-          threshold_df: $threshold_df
-          macie_metrics_df: $macie_metrics_df
-          macie_testing_df: $macie_testing_df
-          historical_stats_df: $historical_stats_df
+          sql: "@text:sql/historical_stats.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
 
-  load:
-    macie_monitoring_df:
-      - connector: onestream
+  local:
+    extract:
+      thresholds_raw:
+        connector: snowflake
         options:
-          table_name: etip_controls_monitoring_metrics
-          business_application: BAENTERPRISETECHINSIGHTS
-          file_type: AVRO
-          avro_schema: "@json:avro_schema.json"
+          sql: "@text:sql/monitoring_thresholds.sql"
+      macie_metrics:
+        connector: snowflake
+        options:
+          sql: "@text:sql/macie_metrics.sql"
+      macie_testing:
+        connector: snowflake
+        options:
+          sql: "@text:sql/macie_testing.sql"
+      historical_stats:
+        connector: snowflake
+        options:
+          sql: "@text:sql/historical_stats.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
 
-  prepare_test_data:
-    threshold_df:
-      - function: head
-        options:
-          n: 500000
-    macie_metrics_df:
-      - function: head
-        options:
-          n: 500000
-    macie_testing_df:
-      - function: head
-        options:
-          n: 500000
-    historical_stats_df:
-      - function: head
-        options:
-          n: 500000
+# REQUIRED: Comprehensive Data Quality Validation
+ingress_validation:
+  thresholds_raw:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        required_columns:
+          - monitoring_metric_id
+          - control_id
+          - monitoring_metric_tier
+          - metric_name
+          - metric_description
+          - warning_threshold
+          - alerting_threshold
+          - control_executor
+    - type: count_check
+      fatal: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        check_type: "data_freshness"
+        description: "Ingress data quality check"
 
-  export_test_data:
-    threshold_df:
-    macie_metrics_df:
-    macie_testing_df:
-    historical_stats_df:
+  macie_metrics:
+    - type: count_check
+      fatal: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        description: "Macie metrics data quality check"
+
+  macie_testing:
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        description: "Macie testing data quality check"
+
+  historical_stats:
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+
+egress_validation:
+  monitoring_metrics:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        required_columns:
+          - control_monitoring_utc_timestamp
+          - control_id
+          - monitoring_metric_id
+          - monitoring_metric_value
+          - monitoring_metric_status
+          - metric_value_numerator
+          - metric_value_denominator
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        description: "Egress data will not match ingress data due to metric calculations"

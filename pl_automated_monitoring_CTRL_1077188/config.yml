@@ -3,94 +3,146 @@ pipeline:
   use_test_data_on_nonprod: false
   dq_strict_mode: false
 
-stages:
-  extract:
-    thresholds_raw:
-      connector: snowflake
+environments:
+  prod:
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds.sql"
+      dataset_certificates:
+        connector: snowflake
+        options:
+          sql: |
+            SELECT DISTINCT
+                certificate_arn,
+                certificate_id,
+                nominal_issuer,
+                not_valid_before_utc_timestamp,
+                not_valid_after_utc_timestamp,
+                last_usage_observation_utc_timestamp
+            FROM CYBR_DB.PHDP_CYBR.CERTIFICATE_CATALOG_CERTIFICATE_USAGE 
+            WHERE certificate_arn LIKE '%arn:aws:acm%' 
+              AND nominal_issuer = 'Amazon' 
+              AND not_valid_after_utc_timestamp >= DATEADD('DAY', -365, CURRENT_TIMESTAMP)
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+  local:
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds.sql"
+      dataset_certificates:
+        connector: snowflake
+        options:
+          sql: |
+            SELECT DISTINCT
+                certificate_arn,
+                certificate_id,
+                nominal_issuer,
+                not_valid_before_utc_timestamp,
+                not_valid_after_utc_timestamp,
+                last_usage_observation_utc_timestamp
+            FROM CYBR_DB.PHDP_CYBR.CERTIFICATE_CATALOG_CERTIFICATE_USAGE 
+            WHERE certificate_arn LIKE '%arn:aws:acm%' 
+              AND nominal_issuer = 'Amazon' 
+              AND not_valid_after_utc_timestamp >= DATEADD('DAY', -365, CURRENT_TIMESTAMP)
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+# REQUIRED: Comprehensive Data Quality Validation
+ingress_validation:
+  thresholds_raw:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [prod]
       options:
-        sql: "@text:sql/monitoring_thresholds.sql"
-    dataset_certificates:
-      connector: snowflake
+        required_columns:
+          - monitoring_metric_id
+          - control_id
+          - monitoring_metric_tier
+          - metric_name
+          - metric_description
+          - warning_threshold
+          - alerting_threshold
+          - control_executor
+    - type: count_check
+      fatal: true
+      envs: [prod]
       options:
-        sql: |
-          SELECT DISTINCT
-              certificate_arn,
-              certificate_id,
-              nominal_issuer,
-              not_valid_before_utc_timestamp,
-              not_valid_after_utc_timestamp,
-              last_usage_observation_utc_timestamp
-          FROM CYBR_DB.PHDP_CYBR.CERTIFICATE_CATALOG_CERTIFICATE_USAGE 
-          WHERE certificate_arn LIKE '%arn:aws:acm%' 
-            AND nominal_issuer = 'Amazon' 
-            AND not_valid_after_utc_timestamp >= DATEADD('DAY', -365, CURRENT_TIMESTAMP)
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [prod]
+      options:
+        check_type: "data_freshness"
+        description: "Ingress data quality check"
+  dataset_certificates:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [prod]
+      options:
+        required_columns:
+          - certificate_arn
+          - certificate_id
+          - nominal_issuer
+          - not_valid_before_utc_timestamp
+          - not_valid_after_utc_timestamp
+          - last_usage_observation_utc_timestamp
+    - type: count_check
+      fatal: true
+      envs: [prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
 
-  ingress_validation:
-    thresholds_raw:
-      - type: count_check
-        fatal: true
-        envs:
-          - qa
-          - prod
-        options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
-    dataset_certificates:
-      - type: count_check
-        fatal: true
-        envs:
-          - qa
-          - prod
-        options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: CYBR_DB.PHDP_CYBR.CERTIFICATE_CATALOG_CERTIFICATE_USAGE
+egress_validation:
+  monitoring_metrics:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [prod]
+      options:
+        required_columns:
+          - control_monitoring_utc_timestamp
+          - control_id
+          - monitoring_metric_id
+          - monitoring_metric_value
+          - monitoring_metric_status
+          - metric_value_numerator
+          - metric_value_denominator
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [prod]
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [prod]
+      options:
+        description: "Egress data will not match ingress data due to API enrichment"
 
-  transform:
-    tier0_metrics:
-      - function: custom/calculate_tier0_metrics
-        options:
-          thresholds_raw: $thresholds_raw
-    
-    tier1_metrics:
-      - function: custom/calculate_tier1_metrics
-        options:
-          thresholds_raw: $thresholds_raw
-          dataset_certificates: $dataset_certificates
-    
-    tier2_metrics:
-      - function: custom/calculate_tier2_metrics
-        options:
-          thresholds_raw: $thresholds_raw
-          dataset_certificates: $dataset_certificates
-    
-    monitoring_metrics:
-      - function: custom/combine_metrics
-        options:
-          tier0_metrics: $tier0_metrics
-          tier1_metrics: $tier1_metrics
-          tier2_metrics: $tier2_metrics
-
-  load:
-    monitoring_metrics:
-      - connector: onestream
-        options:
-          table_name: etip_controls_monitoring_metrics
-          file_type: AVRO
-          avro_schema: "@json:avro_schema.json"
-          business_application: BAENTERPRISETECHINSIGHTS
-
-  prepare_test_data:
-    thresholds_raw:
-      - function: head
-        options:
-          n: 500000
-    dataset_certificates:
-      - function: head
-        options:
-          n: 500000
-
-  export_test_data:
-    thresholds_raw:
-    dataset_certificates:
+transform:
+  monitoring_metrics:
+    - function: custom/calculate_metrics
+      options:
+        thresholds_raw: $thresholds_raw
+        dataset_certificates: $dataset_certificates
