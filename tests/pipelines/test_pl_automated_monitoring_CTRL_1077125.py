@@ -8,7 +8,8 @@ import pytest
 from freezegun import freeze_time
 from requests import RequestException, Response
 
-from pl_automated_monitoring_CTRL_1077125.pipeline import (
+import pipelines.pl_automated_monitoring_CTRL_1077125.pipeline as pipeline
+from pipelines.pl_automated_monitoring_CTRL_1077125.pipeline import (
     PLAutomatedMonitoringCTRL1077125,
     calculate_metrics,
     _filter_resources,
@@ -89,6 +90,7 @@ class MockExchangeConfig:
 class MockEnv:
     def __init__(self):
         self.exchange = MockExchangeConfig()
+        self.env = self  # Add self-reference for pipeline framework compatibility
 
 
 def generate_mock_api_response(content: Optional[dict] = None, status_code: int = 200) -> Response:
@@ -219,7 +221,7 @@ EMPTY_API_RESPONSE_DATA = {"resourceConfigurations": [], "nextRecordKey": ""}
 
 
 @freeze_time(FIXED_TIMESTAMP)
-def test_calculate_metrics_success(mock):
+def test_calculate_metrics_success():
     """Test successful metrics calculation"""
     # Setup test data
     thresholds_df = _mock_threshold_df()
@@ -402,7 +404,7 @@ def test_pipeline_initialization():
 
 def test_get_api_connector_success():
     """Test successful API connector creation"""
-    with mock.patch("pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
+    with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
         mock_refresh.return_value = "mock_token_value"
         
         env = MockEnv()
@@ -420,7 +422,7 @@ def test_get_api_connector_success():
 
 def test_get_api_connector_failure():
     """Test handling of API connector creation failure"""
-    with mock.patch("pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
+    with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
         mock_refresh.side_effect = Exception("Token refresh failed")
         
         env = MockEnv()
@@ -433,7 +435,7 @@ def test_get_api_connector_failure():
 
 def test_transform_method():
     """Test pipeline transform method"""
-    with mock.patch("pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
+    with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
         mock_refresh.return_value = "mock_token"
         
         env = MockEnv()
@@ -452,7 +454,7 @@ def test_transform_method():
 @freeze_time(FIXED_TIMESTAMP)
 def test_end_to_end_pipeline():
     """Consolidated end-to-end test for pipeline functionality"""
-    with mock.patch("pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
+    with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
         mock_refresh.return_value = "mock_token_value"
         
         # Use consistent timestamps
@@ -551,18 +553,18 @@ def test_missing_configuration_values():
     assert len(tier2_non) == 0
 
 
-def test_main_function_execution(mock):
+def test_main_function_execution():
     """Test main function execution path"""
     mock_env = mock.Mock()
     
     with mock.patch("etip_env.set_env_vars", return_value=mock_env):
-        with mock.patch("pl_automated_monitoring_CTRL_1077125.pipeline.run") as mock_run:
+        with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077125.pipeline.run") as mock_run:
             with mock.patch("sys.exit") as mock_exit:
                 # Execute main block
                 code = """
 if True:
     from etip_env import set_env_vars
-    from pl_automated_monitoring_CTRL_1077125.pipeline import run
+    from pipelines.pl_automated_monitoring_CTRL_1077125.pipeline import run
     
     env = set_env_vars()
     try:
@@ -578,7 +580,7 @@ if True:
                 mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
 
 
-def test_pipeline_run_method(mock):
+def test_pipeline_run_method():
     """Test pipeline run method with default parameters"""
     env = MockEnv()
     pipeline_instance = PLAutomatedMonitoringCTRL1077125(env)

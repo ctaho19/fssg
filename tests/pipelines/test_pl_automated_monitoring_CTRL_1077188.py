@@ -9,7 +9,8 @@ import sys
 from requests.exceptions import RequestException
 
 # Import pipeline components
-from pl_automated_monitoring_CTRL_1077188.pipeline import (
+import pipelines.pl_automated_monitoring_CTRL_1077188.pipeline as pipeline
+from pipelines.pl_automated_monitoring_CTRL_1077188.pipeline import (
     PLAutomatedMonitoringCTRL1077188,
     calculate_metrics,
     run
@@ -36,6 +37,7 @@ class MockExchangeConfig:
 class MockEnv:
     def __init__(self):
         self.exchange = MockExchangeConfig()
+        self.env = self  # Add self-reference for pipeline framework compatibility
 
 class MockOauthApi:
     def __init__(self, url, api_token, ssl_context=None):
@@ -139,7 +141,7 @@ def test_pipeline_initialization():
     assert 'test-exchange.com' in pipeline.api_url
     assert 'internal-operations/cloud-service/aws-tooling/search-resource-configurations' in pipeline.api_url
 
-def test_get_api_connector_with_ssl(mock):
+def test_get_api_connector_with_ssl():
     """Test _get_api_connector method with SSL certificate"""
     with patch('pl_automated_monitoring_CTRL_1077188.pipeline.refresh') as mock_refresh:
         with patch('connectors.ca_certs.C1_CERT_FILE', '/path/to/cert.pem'):
@@ -161,7 +163,7 @@ def test_get_api_connector_with_ssl(mock):
                     exchange_url="test-exchange.com"
                 )
 
-def test_get_api_connector_without_ssl(mock):
+def test_get_api_connector_without_ssl():
     """Test _get_api_connector method without SSL certificate"""
     with patch('pl_automated_monitoring_CTRL_1077188.pipeline.refresh') as mock_refresh:
         with patch('connectors.ca_certs.C1_CERT_FILE', None):
@@ -175,7 +177,7 @@ def test_get_api_connector_without_ssl(mock):
             assert connector.api_token == "Bearer test_token"
             assert connector.ssl_context is None
 
-def test_get_api_connector_refresh_failure(mock):
+def test_get_api_connector_refresh_failure():
     """Test _get_api_connector method when OAuth refresh fails"""
     with patch('pl_automated_monitoring_CTRL_1077188.pipeline.refresh') as mock_refresh:
         mock_refresh.side_effect = Exception("OAuth refresh failed")
@@ -786,7 +788,7 @@ def test_main_execution_success():
             
             # Execute main block logic
             from etip_env import set_env_vars
-            from pl_automated_monitoring_CTRL_1077188.pipeline import run
+            from pipelines.pl_automated_monitoring_CTRL_1077188.pipeline import run
             
             env = set_env_vars()
             run(env=env, is_load=False, dq_actions=False)
@@ -807,7 +809,7 @@ def test_main_execution_with_exception():
                 # Execute and expect sys.exit to be called
                 try:
                     from etip_env import set_env_vars
-                    from pl_automated_monitoring_CTRL_1077188.pipeline import run
+                    from pipelines.pl_automated_monitoring_CTRL_1077188.pipeline import run
                     
                     env = set_env_vars()
                     run(env=env, is_load=False, dq_actions=False)
@@ -862,18 +864,18 @@ def test_certificate_arn_case_insensitive_matching():
     assert tier1_result["resources_info"] is None  # No missing certificates
 
 
-def test_main_function_execution(mock):
+def test_main_function_execution():
     """Test main function execution path"""
     mock_env = mock.Mock()
     
     with mock.patch("etip_env.set_env_vars", return_value=mock_env):
-        with mock.patch("pl_automated_monitoring_CTRL_1077188.pipeline.run") as mock_run:
+        with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077188.pipeline.run") as mock_run:
             with mock.patch("sys.exit") as mock_exit:
                 # Execute main block
                 code = """
 if True:
     from etip_env import set_env_vars
-    from pl_automated_monitoring_CTRL_1077188.pipeline import run
+    from pipelines.pl_automated_monitoring_CTRL_1077188.pipeline import run
     
     env = set_env_vars()
     try:
@@ -889,7 +891,7 @@ if True:
                 mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
 
 
-def test_pipeline_run_method(mock):
+def test_pipeline_run_method():
     """Test pipeline run method with default parameters"""
     env = MockEnv()
     pipeline_instance = PLAutomatedMonitoringCTRL1077188(env)

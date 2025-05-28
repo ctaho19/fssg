@@ -839,6 +839,45 @@ All pipelines must output data with these exact field names and types:
 4. **Division by Zero Protection**: Handle edge cases in percentage calculations
 5. **Configuration Validation**: Verify all required config sections exist
 
+### Pipeline Architecture Standards
+
+#### Helper Function Design
+
+**CRITICAL**: Transformer functions must NOT instantiate pipeline classes. This causes test failures and breaks the separation of concerns.
+
+**❌ WRONG - Do NOT instantiate pipeline classes in transformers:**
+```python
+@transformer
+def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
+    # This will cause "'NoneType' object has no attribute 'env'" errors in tests
+    pipeline = PLAutomatedMonitoringControlName(None)  # BAD!
+    results = pipeline._helper_method(data)
+    return results
+```
+
+**✅ CORRECT - Use standalone helper functions:**
+```python
+# Define helper functions outside the class as standalone functions
+def _fetch_resources_by_type(api_connector: OauthApi, required_controls: List[str]) -> Dict[str, List[Dict]]:
+    """Standalone helper function that doesn't need pipeline instance"""
+    # Implementation here
+    return {}
+
+@transformer  
+def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
+    api_connector = context["api_connector"]
+    # Call standalone functions directly
+    all_resources = _fetch_resources_by_type(api_connector, required_controls)
+    return pd.DataFrame(results)
+
+class PLAutomatedMonitoringControlName(ConfigPipeline):
+    def _fetch_resources_by_type(self, api_connector: OauthApi, required_controls: List[str]) -> Dict[str, List[Dict]]:
+        """Instance method delegates to standalone function"""
+        return _fetch_resources_by_type(api_connector, required_controls)
+```
+
+**Reference Implementation**: Follow the pattern used in `pl_automated_monitoring_cloud_custodian` where helper functions are standalone and don't require pipeline instantiation.
+
 ### Common Anti-Patterns to Avoid
 
 1. **Hardcoded Values**: Never hardcode control IDs, use config files

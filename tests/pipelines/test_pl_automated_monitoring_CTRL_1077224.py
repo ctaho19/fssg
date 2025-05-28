@@ -6,7 +6,8 @@ from datetime import datetime
 from requests import Response, RequestException
 
 # Import pipeline components
-from pl_automated_monitoring_CTRL_1077224.pipeline import (
+import pipelines.pl_automated_monitoring_CTRL_1077224.pipeline as pipeline
+from pipelines.pl_automated_monitoring_CTRL_1077224.pipeline import (
     PLAutomatedMonitoringCTRL1077224,
     calculate_metrics
 )
@@ -32,6 +33,7 @@ class MockExchangeConfig:
 class MockEnv:
     def __init__(self):
         self.exchange = MockExchangeConfig()
+        self.env = self  # Add self-reference for pipeline framework compatibility
 
 class MockOauthApi:
     def __init__(self, url, api_token, ssl_context=None):
@@ -160,7 +162,7 @@ def _mock_kms_resources():
     }
 
 @freeze_time("2024-11-05 12:09:00")
-def test_calculate_metrics_success(mock):
+def test_calculate_metrics_success():
     """Test successful metrics calculation"""
     # Setup test data
     thresholds_df = _mock_threshold_df()
@@ -206,7 +208,7 @@ def test_pipeline_initialization():
     assert hasattr(pipeline, 'api_url')
     assert 'test-exchange.com' in pipeline.api_url
 
-def test_pipeline_run_method(mock):
+def test_pipeline_run_method():
     """Test pipeline run method with default parameters"""
     env = MockEnv()
     pipeline = PLAutomatedMonitoringCTRL1077224(env)
@@ -218,7 +220,7 @@ def test_pipeline_run_method(mock):
     # Verify run was called with default parameters
     mock_run.assert_called_once_with()
 
-def test_api_error_handling(mock):
+def test_api_error_handling():
     """Test API error handling and exception wrapping"""
     # Test network errors
     mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
@@ -230,7 +232,7 @@ def test_api_error_handling(mock):
     with pytest.raises(RuntimeError, match="Failed to fetch resources from API"):
         calculate_metrics(_mock_threshold_df(), context)
 
-def test_pagination_handling(mock):
+def test_pagination_handling():
     """Test API pagination with multiple responses"""
     # Create paginated responses
     page1_response = generate_mock_api_response({
@@ -252,7 +254,7 @@ def test_pagination_handling(mock):
     assert not result.empty
 
 @freeze_time("2024-11-05 12:09:00")
-def test_tier_compliance_logic(mock):
+def test_tier_compliance_logic():
     """Test tier-specific compliance logic"""
     thresholds_df = _mock_threshold_df()
     mock_response = generate_mock_api_response(_mock_kms_resources())
@@ -277,7 +279,7 @@ def test_tier_compliance_logic(mock):
     assert tier2_row["metric_value_numerator"] == 1
     assert tier2_row["metric_value_denominator"] == 2
 
-def test_resource_filtering(mock):
+def test_resource_filtering():
     """Test resource exclusion filtering"""
     # Add excluded resources to test data
     excluded_resources = _mock_kms_resources()
@@ -313,7 +315,7 @@ def test_resource_filtering(mock):
     tier1_row = result[result["monitoring_metric_id"] == 24].iloc[0]
     assert tier1_row["metric_value_denominator"] == 3
 
-def test_compliance_status_determination(mock):
+def test_compliance_status_determination():
     """Test compliance status based on thresholds"""
     thresholds_df = pd.DataFrame([{
         "monitoring_metric_id": 24,
@@ -350,18 +352,18 @@ def test_compliance_status_determination(mock):
     # 100% compliance should be Green
     assert result.iloc[0]["monitoring_metric_status"] == "Green"
 
-def test_main_function_execution(mock):
+def test_main_function_execution():
     """Test main function execution path"""
     mock_env = mock.Mock()
     
     with mock.patch("etip_env.set_env_vars", return_value=mock_env):
-        with mock.patch("pl_automated_monitoring_CTRL_1077224.pipeline.run") as mock_run:
+        with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077224.pipeline.run") as mock_run:
             with mock.patch("sys.exit") as mock_exit:
                 # Execute main block
                 code = """
 if True:
     from etip_env import set_env_vars
-    from pl_automated_monitoring_CTRL_1077224.pipeline import run
+    from pipelines.pl_automated_monitoring_CTRL_1077224.pipeline import run
     
     env = set_env_vars()
     try:
@@ -376,7 +378,7 @@ if True:
                 assert not mock_exit.called
                 mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
 
-def test_empty_api_response(mock):
+def test_empty_api_response():
     """Test handling of empty API response"""
     thresholds_df = _mock_threshold_df()
     empty_response = generate_mock_api_response({"resourceConfigurations": []})
@@ -392,7 +394,7 @@ def test_empty_api_response(mock):
     assert all(result["metric_value_numerator"] == 0)
     assert all(result["metric_value_denominator"] == 0)
 
-def test_api_status_code_error(mock):
+def test_api_status_code_error():
     """Test handling of API error status codes"""
     thresholds_df = _mock_threshold_df()
     error_response = generate_mock_api_response({}, status_code=500)
@@ -417,9 +419,9 @@ def test_context_initialization():
     assert pipeline.context == {}
 
 
-def test_get_api_connector_method(mock):
+def test_get_api_connector_method():
     """Test _get_api_connector method functionality"""
-    with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.refresh') as mock_refresh:
+    with mock.patch('pipelines.pl_automated_monitoring_CTRL_1077224.pipeline.refresh') as mock_refresh:
         with mock.patch('connectors.api.OauthApi') as mock_oauth_api:
             mock_refresh.return_value = "test_token"
             mock_connector = Mock()
@@ -439,7 +441,7 @@ def test_get_api_connector_method(mock):
             mock_oauth_api.assert_called_once()
 
 
-def test_transform_method(mock):
+def test_transform_method():
     """Test transform method sets up API context correctly"""
     env = MockEnv()
     pipeline = PLAutomatedMonitoringCTRL1077224(env)
@@ -456,10 +458,10 @@ def test_transform_method(mock):
             mock_get_connector.assert_called_once()
             mock_super_transform.assert_called_once()
 
-def test_ssl_context_handling(mock):
+def test_ssl_context_handling():
     """Test SSL context handling when C1_CERT_FILE is set"""
     # Test that _get_api_connector can be called without error
-    with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.refresh') as mock_refresh:
+    with mock.patch('pipelines.pl_automated_monitoring_CTRL_1077224.pipeline.refresh') as mock_refresh:
         with mock.patch('connectors.ca_certs.C1_CERT_FILE', '/path/to/cert.pem'):
             with mock.patch('ssl.create_default_context') as mock_ssl:
                 with mock.patch('connectors.api.OauthApi') as mock_oauth_api:
@@ -473,7 +475,7 @@ def test_ssl_context_handling(mock):
                     mock_ssl.assert_called_once_with(cafile='/path/to/cert.pem')
                     mock_oauth_api.assert_called_once()
 
-def test_json_serialization_in_resources_info(mock):
+def test_json_serialization_in_resources_info():
     """Test that resources_info properly serializes JSON"""
     thresholds_df = _mock_threshold_df()
     mock_response = generate_mock_api_response(_mock_kms_resources())
@@ -494,7 +496,7 @@ def test_json_serialization_in_resources_info(mock):
                 import json
                 json.loads(item)  # Should not raise exception
 
-def test_division_by_zero_protection(mock):
+def test_division_by_zero_protection():
     """Test that division by zero is handled gracefully"""
     thresholds_df = _mock_threshold_df()
     
@@ -525,7 +527,7 @@ def test_division_by_zero_protection(mock):
     assert all(result["monitoring_metric_value"] == 0.0)
     assert all(result["metric_value_denominator"] == 0)
 
-def test_tier_2_with_no_tier_1_compliant_resources(mock):
+def test_tier_2_with_no_tier_1_compliant_resources():
     """Test Tier 2 calculation when no resources pass Tier 1"""
     thresholds_df = _mock_threshold_df()
     
@@ -563,15 +565,15 @@ def test_tier_2_with_no_tier_1_compliant_resources(mock):
     assert tier2_row["metric_value_denominator"] == 0
 
 
-def test_run_function(mock):
+def test_run_function():
     """Test run function with various parameters"""
     env = MockEnv()
     
-    with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.PLAutomatedMonitoringCTRL1077224') as mock_pipeline_class:
+    with mock.patch('pipelines.pl_automated_monitoring_CTRL_1077224.pipeline.PLAutomatedMonitoringCTRL1077224') as mock_pipeline_class:
         mock_pipeline = Mock()
         mock_pipeline_class.return_value = mock_pipeline
         
-        from pl_automated_monitoring_CTRL_1077224.pipeline import run
+        from pipelines.pl_automated_monitoring_CTRL_1077224.pipeline import run
         
         # Test normal execution
         run(env, is_export_test_data=False, is_load=True, dq_actions=True)
@@ -581,15 +583,15 @@ def test_run_function(mock):
         mock_pipeline.run.assert_called_once_with(load=True, dq_actions=True)
 
 
-def test_run_function_export_test_data(mock):
+def test_run_function_export_test_data():
     """Test run function with export test data option"""
     env = MockEnv()
     
-    with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.PLAutomatedMonitoringCTRL1077224') as mock_pipeline_class:
+    with mock.patch('pipelines.pl_automated_monitoring_CTRL_1077224.pipeline.PLAutomatedMonitoringCTRL1077224') as mock_pipeline_class:
         mock_pipeline = Mock()
         mock_pipeline_class.return_value = mock_pipeline
         
-        from pl_automated_monitoring_CTRL_1077224.pipeline import run
+        from pipelines.pl_automated_monitoring_CTRL_1077224.pipeline import run
         
         # Test export test data path
         run(env, is_export_test_data=True, dq_actions=False)
