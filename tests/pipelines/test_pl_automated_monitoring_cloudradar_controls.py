@@ -550,7 +550,7 @@ def test_ssl_context_handling():
                     mock_refresh.return_value = "test_token"
                     mock_ssl.return_value = "mock_ssl_context"
                     
-                    connector = pipeline._get_api_connector()
+                    pipeline._get_api_connector()
                     mock_ssl.assert_called_once_with(cafile='/path/to/cert.pem')
                     mock_oauth_api.assert_called_once()
 

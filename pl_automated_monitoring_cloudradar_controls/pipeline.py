@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import datetime
 import json
 import ssl
-import os
 from config_pipeline import ConfigPipeline
 from connectors.api import OauthApi
 from connectors.ca_certs import C1_CERT_FILE
@@ -371,6 +370,6 @@ if __name__ == "__main__":
     env = set_env_vars()
     try:
         run(env=env, is_load=False, dq_actions=False)
-    except Exception as e:
+    except Exception:
         import sys
         sys.exit(1)
