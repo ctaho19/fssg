@@ -818,6 +818,30 @@ All pipelines must output data with these exact field names and types:
 
 **Proactive Test Validation**: Read each individual unit test and flag any that will fail due to these common error patterns. Fix them before committing.
 
+#### Updating Tests After Architectural Changes
+
+When refactoring pipeline architecture (like converting to standalone helper functions), update related tests:
+
+**❌ OBSOLETE - Tests for old problematic patterns:**
+```python
+def test_calculate_metrics_with_env_fix():
+    # This test was written to work around the old pipeline instantiation issue
+    with patch('pipeline.PLAutomatedMonitoring') as mock_pipeline_class:
+        mock_pipeline_class.return_value = mock_pipeline
+        result = calculate_metrics(thresholds_df, context)
+        mock_pipeline_class.assert_called_once_with(None)  # Will fail after fix
+```
+
+**✅ UPDATED - Tests for new architecture:**
+```python
+def test_calculate_metrics_standalone_architecture():
+    # Test that transformer works with standalone function architecture
+    result = calculate_metrics(thresholds_df, context)
+    assert not result.empty
+    assert list(result.columns) == AVRO_SCHEMA_FIELDS
+    # No pipeline mocking needed - tests the actual standalone functions
+```
+
 ### File Organization Requirements
 
 1. **Directory Structure**: Follow exact structure with `sql/` subdirectory
@@ -877,6 +901,52 @@ class PLAutomatedMonitoringControlName(ConfigPipeline):
 ```
 
 **Reference Implementation**: Follow the pattern used in `pl_automated_monitoring_cloud_custodian` where helper functions are standalone and don't require pipeline instantiation.
+
+#### Data Type Standards in Tests
+
+**CRITICAL**: When testing DataFrame outputs, account for pandas/numpy data types.
+
+**❌ WRONG - Testing for Python built-in types:**
+```python
+def test_data_types():
+    result = calculate_metrics(thresholds_df, context)
+    row = result.iloc[0]
+    assert isinstance(row["metric_value_numerator"], int)  # Will fail - pandas uses numpy.int64
+    assert isinstance(row["monitoring_metric_value"], float)  # May fail - could be numpy.float64
+```
+
+**✅ CORRECT - Testing for pandas-compatible data types:**
+```python
+def test_data_types():
+    result = calculate_metrics(thresholds_df, context)
+    row = result.iloc[0]
+    # Use pandas type checking for integer columns
+    assert pd.api.types.is_integer_dtype(result["metric_value_numerator"])
+    assert pd.api.types.is_integer_dtype(result["metric_value_denominator"])
+    # Float types are more flexible
+    assert isinstance(row["monitoring_metric_value"], (float, pd.api.types.is_float_dtype))
+```
+
+#### Pipeline Data Type Enforcement
+
+**REQUIRED**: Ensure consistent data types in pipeline outputs:
+```python
+@transformer
+def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
+    # ... calculation logic ...
+    
+    result_df = pd.DataFrame(all_results)
+    
+    # Ensure correct data types to match test expectations
+    if not result_df.empty:
+        result_df = result_df.astype({
+            "metric_value_numerator": "int64",
+            "metric_value_denominator": "int64", 
+            "monitoring_metric_value": "float64"
+        })
+    
+    return result_df
+```
 
 ### Common Anti-Patterns to Avoid
 

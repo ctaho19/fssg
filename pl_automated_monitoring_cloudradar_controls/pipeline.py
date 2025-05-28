@@ -353,7 +353,17 @@ def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> 
         )
         all_results.extend(control_results)
     
-    return pd.DataFrame(all_results)
+    result_df = pd.DataFrame(all_results)
+    
+    # Ensure correct data types to match test expectations
+    if not result_df.empty:
+        result_df = result_df.astype({
+            "metric_value_numerator": "int64",
+            "metric_value_denominator": "int64",
+            "monitoring_metric_value": "float64"
+        })
+    
+    return result_df
 
 if __name__ == "__main__":
     from etip_env import set_env_vars

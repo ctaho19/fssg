@@ -225,9 +225,10 @@ def test_calculate_metrics_multi_control_success():
     # Verify data types
     row = result.iloc[0]
     assert isinstance(row["control_monitoring_utc_timestamp"], datetime)
-    assert isinstance(row["monitoring_metric_value"], float)
-    assert isinstance(row["metric_value_numerator"], int)
-    assert isinstance(row["metric_value_denominator"], int)
+    assert isinstance(row["monitoring_metric_value"], (float, pd.api.types.is_float_dtype))
+    # pandas/numpy integers are acceptable
+    assert pd.api.types.is_integer_dtype(result["metric_value_numerator"])
+    assert pd.api.types.is_integer_dtype(result["metric_value_denominator"])
 
 @freeze_time("2024-11-05 12:09:00")
 def test_kms_key_rotation_control_1077224():
@@ -588,8 +589,8 @@ def test_run_function():
         mock_pipeline.run.assert_called_once_with(load=True, dq_actions=False)
         assert result == "test_result"
 
-def test_calculate_metrics_with_env_fix():
-    """Test calculate_metrics without pipeline instantiation issue"""
+def test_calculate_metrics_standalone_architecture():
+    """Test that calculate_metrics works with standalone function architecture"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077224")
     
     mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
@@ -597,28 +598,21 @@ def test_calculate_metrics_with_env_fix():
     
     context = {"api_connector": mock_api}
     
-    # Patch the problematic pipeline instantiation
-    with patch('pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.PLAutomatedMonitoringCloudradarControls') as mock_pipeline_class:
-        mock_pipeline = mock.Mock()
-        mock_pipeline_class.return_value = mock_pipeline
-        mock_pipeline._fetch_resources_by_type.return_value = {"AWS::KMS::Key": _mock_kms_resources()["resourceConfigurations"]}
-        mock_pipeline._calculate_control_compliance.return_value = [
-            {
-                "control_monitoring_utc_timestamp": datetime.now(),
-                "control_id": "CTRL-1077224",
-                "monitoring_metric_id": 24,
-                "monitoring_metric_value": 66.67,
-                "monitoring_metric_status": "Red",
-                "metric_value_numerator": 2,
-                "metric_value_denominator": 3,
-                "resources_info": None
-            }
-        ]
-        
-        result = calculate_metrics(thresholds_df, context)
-        
-        assert not result.empty
-        mock_pipeline_class.assert_called_once_with(None)
+    # Test that calculate_metrics works without any pipeline instantiation
+    # This verifies our architectural fix where helper functions are standalone
+    result = calculate_metrics(thresholds_df, context)
+    
+    # Verify the result structure and data
+    assert not result.empty
+    assert len(result) == 2  # Should have 2 metrics (Tier 1 and Tier 2)
+    assert list(result.columns) == AVRO_SCHEMA_FIELDS
+    
+    # Verify control ID is correct
+    assert all(result["control_id"] == "CTRL-1077224")
+    
+    # Verify that we get expected metric IDs
+    metric_ids = set(result["monitoring_metric_id"].unique())
+    assert metric_ids == {24, 25}  # Tier 1 and Tier 2 metrics for CTRL-1077224
 
 def test_fetch_cloudradar_resources_error_handling():
     """Test error handling in _fetch_cloudradar_resources"""
