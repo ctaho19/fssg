@@ -6,7 +6,8 @@ from datetime import datetime
 from requests import Response, RequestException
 
 # Import pipeline components
-from pl_automated_monitoring_cloudradar_controls.pipeline import (
+import pipelines.pl_automated_monitoring_cloudradar_controls.pipeline as pipeline
+from pipelines.pl_automated_monitoring_cloudradar_controls.pipeline import (
     PLAutomatedMonitoringCloudradarControls,
     calculate_metrics,
     CONTROL_CONFIGS
@@ -33,6 +34,7 @@ class MockExchangeConfig:
 class MockEnv:
     def __init__(self):
         self.exchange = MockExchangeConfig()
+        self.env = self  # Add self-reference for pipeline framework compatibility
 
 class MockOauthApi:
     def __init__(self, url, api_token, ssl_context=None):
@@ -185,7 +187,7 @@ def _mock_ec2_resources():
     }
 
 @freeze_time("2024-11-05 12:09:00")
-def test_calculate_metrics_multi_control_success(mock):
+def test_calculate_metrics_multi_control_success():
     """Test successful metrics calculation for multiple controls"""
     thresholds_df = _mock_multi_control_thresholds()
     
@@ -228,7 +230,7 @@ def test_calculate_metrics_multi_control_success(mock):
     assert isinstance(row["metric_value_denominator"], int)
 
 @freeze_time("2024-11-05 12:09:00")
-def test_kms_key_rotation_control_1077224(mock):
+def test_kms_key_rotation_control_1077224():
     """Test CTRL-1077224 KMS Key Rotation logic"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077224")
     
@@ -250,7 +252,7 @@ def test_kms_key_rotation_control_1077224(mock):
     assert tier2_row["metric_value_denominator"] == 2
 
 @freeze_time("2024-11-05 12:09:00")
-def test_ec2_metadata_control_1077231(mock):
+def test_ec2_metadata_control_1077231():
     """Test CTRL-1077231 EC2 Metadata Service logic"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077231")
     
@@ -272,7 +274,7 @@ def test_ec2_metadata_control_1077231(mock):
     assert tier2_row["metric_value_denominator"] == 2
 
 @freeze_time("2024-11-05 12:09:00")
-def test_kms_key_origin_control_1077125(mock):
+def test_kms_key_origin_control_1077125():
     """Test CTRL-1077125 KMS Key Origin logic"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077125")
     
@@ -323,7 +325,7 @@ def test_control_configs_mapping():
         assert "expected_value" in config
         assert "apply_kms_exclusions" in config
 
-def test_resource_type_optimization(mock):
+def test_resource_type_optimization():
     """Test that resource fetching is optimized by type"""
     thresholds_df = _mock_multi_control_thresholds()
     
@@ -342,7 +344,7 @@ def test_resource_type_optimization(mock):
     assert mock_api.call_count == 2
     assert not result.empty
 
-def test_kms_exclusion_filtering(mock):
+def test_kms_exclusion_filtering():
     """Test KMS-specific resource exclusions"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077224")
     
@@ -381,7 +383,7 @@ def test_kms_exclusion_filtering(mock):
     tier1_row = result[result["monitoring_metric_id"] == 24].iloc[0]
     assert tier1_row["metric_value_denominator"] == 3
 
-def test_api_error_handling(mock):
+def test_api_error_handling():
     """Test API error handling and exception wrapping"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077224")
     
@@ -393,7 +395,7 @@ def test_api_error_handling(mock):
     with pytest.raises(RuntimeError, match="Failed to fetch AWS::KMS::Key resources from API"):
         calculate_metrics(thresholds_df, context)
 
-def test_pagination_handling(mock):
+def test_pagination_handling():
     """Test API pagination with multiple responses"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077224")
     
@@ -417,7 +419,7 @@ def test_pagination_handling(mock):
     assert not result.empty
     assert mock_api.call_count == 2
 
-def test_unknown_control_handling(mock):
+def test_unknown_control_handling():
     """Test handling of unknown control IDs"""
     thresholds_df = pd.DataFrame([{
         "monitoring_metric_id": 99,
@@ -435,7 +437,7 @@ def test_unknown_control_handling(mock):
     # Should return empty DataFrame for unknown controls
     assert result.empty
 
-def test_compliance_status_determination(mock):
+def test_compliance_status_determination():
     """Test compliance status based on thresholds"""
     thresholds_df = pd.DataFrame([{
         "monitoring_metric_id": 24,
@@ -473,18 +475,18 @@ def test_compliance_status_determination(mock):
     # 100% compliance should be Green (>= 95% alerting threshold)
     assert result.iloc[0]["monitoring_metric_status"] == "Green"
 
-def test_main_function_execution(mock):
+def test_main_function_execution():
     """Test main function execution path"""
     mock_env = Mock()
     
     with patch("etip_env.set_env_vars", return_value=mock_env):
-        with patch("pl_automated_monitoring_cloudradar_controls.pipeline.run") as mock_run:
+        with patch("pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.run") as mock_run:
             with patch("sys.exit") as mock_exit:
                 # Execute main block
                 code = """
 if True:
     from etip_env import set_env_vars
-    from pl_automated_monitoring_cloudradar_controls.pipeline import run
+    from pipelines.pl_automated_monitoring_cloudradar_controls.pipeline import run
     
     env = set_env_vars()
     try:
@@ -499,7 +501,7 @@ if True:
                 assert not mock_exit.called
                 mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
 
-def test_empty_api_response(mock):
+def test_empty_api_response():
     """Test handling of empty API response"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077224")
     
@@ -514,7 +516,7 @@ def test_empty_api_response(mock):
     assert all(result["metric_value_numerator"] == 0)
     assert all(result["metric_value_denominator"] == 0)
 
-def test_json_serialization_in_resources_info(mock):
+def test_json_serialization_in_resources_info():
     """Test that resources_info properly serializes JSON"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077224")
     
@@ -534,16 +536,16 @@ def test_json_serialization_in_resources_info(mock):
                 import json
                 json.loads(item)  # Should not raise exception
 
-def test_ssl_context_handling(mock):
+def test_ssl_context_handling():
     """Test SSL context handling when C1_CERT_FILE is set"""
     
-    with mock.patch('pl_automated_monitoring_cloudradar_controls.pipeline.C1_CERT_FILE', '/path/to/cert.pem'):
+    with mock.patch('pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.C1_CERT_FILE', '/path/to/cert.pem'):
         env = MockEnv()
         pipeline = PLAutomatedMonitoringCloudradarControls(env)
         
-        with mock.patch('pl_automated_monitoring_cloudradar_controls.pipeline.refresh') as mock_refresh:
-            with mock.patch('pl_automated_monitoring_cloudradar_controls.pipeline.ssl.create_default_context') as mock_ssl:
-                with mock.patch('pl_automated_monitoring_cloudradar_controls.pipeline.OauthApi') as mock_oauth_api:
+        with mock.patch('pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.refresh') as mock_refresh:
+            with mock.patch('pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.ssl.create_default_context') as mock_ssl:
+                with mock.patch('pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.OauthApi') as mock_oauth_api:
                     mock_refresh.return_value = "test_token"
                     mock_ssl.return_value = "mock_ssl_context"
                     
@@ -558,7 +560,7 @@ def test_transform_method():
     pipeline.context = {}
     
     with patch.object(pipeline, '_get_api_connector') as mock_connector:
-        with patch('pl_automated_monitoring_cloudradar_controls.pipeline.ConfigPipeline.transform') as mock_super_transform:
+        with patch('pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.ConfigPipeline.transform') as mock_super_transform:
             mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
             mock_connector.return_value = mock_api
             
@@ -573,12 +575,12 @@ def test_run_function():
     """Test pipeline run function"""
     env = MockEnv()
     
-    with patch('pl_automated_monitoring_cloudradar_controls.pipeline.PLAutomatedMonitoringCloudradarControls') as mock_pipeline_class:
+    with patch('pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.PLAutomatedMonitoringCloudradarControls') as mock_pipeline_class:
         mock_pipeline = mock.Mock()
         mock_pipeline_class.return_value = mock_pipeline
         mock_pipeline.run.return_value = "test_result"
         
-        from pl_automated_monitoring_cloudradar_controls.pipeline import run
+        from pipelines.pl_automated_monitoring_cloudradar_controls.pipeline import run
         result = run(env, is_load=True, dq_actions=False)
         
         mock_pipeline_class.assert_called_once_with(env)
@@ -586,7 +588,7 @@ def test_run_function():
         mock_pipeline.run.assert_called_once_with(load=True, dq_actions=False)
         assert result == "test_result"
 
-def test_calculate_metrics_with_env_fix(mock):
+def test_calculate_metrics_with_env_fix():
     """Test calculate_metrics without pipeline instantiation issue"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077224")
     
@@ -596,7 +598,7 @@ def test_calculate_metrics_with_env_fix(mock):
     context = {"api_connector": mock_api}
     
     # Patch the problematic pipeline instantiation
-    with patch('pl_automated_monitoring_cloudradar_controls.pipeline.PLAutomatedMonitoringCloudradarControls') as mock_pipeline_class:
+    with patch('pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.PLAutomatedMonitoringCloudradarControls') as mock_pipeline_class:
         mock_pipeline = mock.Mock()
         mock_pipeline_class.return_value = mock_pipeline
         mock_pipeline._fetch_resources_by_type.return_value = {"AWS::KMS::Key": _mock_kms_resources()["resourceConfigurations"]}
@@ -618,7 +620,7 @@ def test_calculate_metrics_with_env_fix(mock):
         assert not result.empty
         mock_pipeline_class.assert_called_once_with(None)
 
-def test_fetch_cloudradar_resources_error_handling(mock):
+def test_fetch_cloudradar_resources_error_handling():
     """Test error handling in _fetch_cloudradar_resources"""
     env = MockEnv()
     pipeline = PLAutomatedMonitoringCloudradarControls(env)
@@ -629,7 +631,7 @@ def test_fetch_cloudradar_resources_error_handling(mock):
     with pytest.raises(RuntimeError, match="Failed to fetch AWS::KMS::Key resources from API"):
         pipeline._fetch_cloudradar_resources(mock_api, "AWS::KMS::Key")
 
-def test_tier2_denominator_adjustment(mock):
+def test_tier2_denominator_adjustment():
     """Test Tier 2 denominator adjustment when resources lack configuration"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077224")
     
@@ -678,7 +680,7 @@ def test_tier2_denominator_adjustment(mock):
     assert tier2_row["metric_value_denominator"] == 1  # Adjusted down
     assert tier2_row["metric_value_numerator"] == 1   # The one with config has "TRUE"
 
-def test_large_resources_info_truncation(mock):
+def test_large_resources_info_truncation():
     """Test that resources_info is truncated to 50 items"""
     thresholds_df = _mock_single_control_thresholds("CTRL-1077224")
     

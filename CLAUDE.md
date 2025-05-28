@@ -756,18 +756,67 @@ All pipelines must output data with these exact field names and types:
 
 ### Testing Requirements
 
-1. **Parameter Naming**: Use `mock` parameter (not `mocker`)
-2. **Timestamp Testing**: Use `freeze_time` for consistent datetime testing
-3. **Context Initialization**: Always initialize `pipeline.context = {}` in tests
-4. **Mock API Connectors**: Use `MockOauthApi` class pattern with proper `send_request` method
-5. **Utility Functions**: Create `_mock_threshold_df()` and similar helper functions
-6. **Coverage Requirements**: Achieve 80%+ code coverage of the pipeline.py file with end-to-end testing
-7. **Error Testing**: Include negative test cases for API failures and empty data
-8. **API Response Generation**: Use standardized `generate_mock_api_response()` function
-9. **Exception Wrapping**: Wrap all API exceptions in `RuntimeError` with descriptive messages
-10. **Function Parameter Testing**: Only pass parameters that exist in function signatures
-11. **Main Function Testing**: Include tests for module execution paths
-12. **Proactively Review Unit Tests**: Read each individual unit test and flag any that will fail due to an error and reccomend a fix.
+#### Critical Import and Mock Standards
+
+1. **Import Patterns**: ALWAYS use the `pipelines.` prefix for all pipeline imports to ensure proper module resolution:
+   ```python
+   # ✅ CORRECT - Use pipelines prefix
+   import pipelines.pl_automated_monitoring_ctrl_1077231.pipeline as pipeline
+   from pipelines.pl_automated_monitoring_cloud_custodian import transform
+   
+   # ❌ WRONG - Missing pipelines prefix will cause ModuleNotFoundError
+   from pl_automated_monitoring_cloudradar_controls.pipeline import calculate_metrics
+   ```
+
+2. **Mock Parameter Usage**: Do NOT add unused `mock` parameters to test functions unless you're actually using pytest-mock functionality:
+   ```python
+   # ✅ CORRECT - No unused mock parameter
+   def test_calculate_metrics_success():
+       """Test successful metrics calculation"""
+       
+   # ❌ WRONG - Unused mock parameter causes "fixture 'mock' not found" error
+   def test_calculate_metrics_success(mock):
+       """Test successful metrics calculation"""
+   ```
+
+3. **MockEnv Class Standards**: Use complete MockEnv implementation that matches working test patterns:
+   ```python
+   # ✅ CORRECT - Complete MockEnv with all required attributes
+   class MockExchangeConfig:
+       def __init__(self):
+           self.client_id = "test_client"
+           self.client_secret = "test_secret"
+           self.exchange_url = "test-exchange.com"
+
+   class MockEnv:
+       def __init__(self):
+           self.exchange = MockExchangeConfig()
+           # Add any other attributes the pipeline framework expects
+   ```
+
+#### Standard Testing Requirements
+
+4. **Timestamp Testing**: Use `freeze_time` for consistent datetime testing
+5. **Context Initialization**: Always initialize `pipeline.context = {}` in tests
+6. **Mock API Connectors**: Use `MockOauthApi` class pattern with proper `send_request` method
+7. **Utility Functions**: Create `_mock_threshold_df()` and similar helper functions
+8. **Coverage Requirements**: Achieve 80%+ code coverage of the pipeline.py file with end-to-end testing
+9. **Error Testing**: Include negative test cases for API failures and empty data
+10. **API Response Generation**: Use standardized `generate_mock_api_response()` function
+11. **Exception Wrapping**: Wrap all API exceptions in `RuntimeError` with descriptive messages
+12. **Function Parameter Testing**: Only pass parameters that exist in function signatures
+13. **Main Function Testing**: Include tests for module execution paths
+
+#### Test Failure Prevention
+
+**Common Test Failure Patterns to Avoid:**
+
+1. **"fixture 'mock' not found"** - Remove unused `mock` parameters from test function signatures
+2. **"ModuleNotFoundError"** - Always use `pipelines.` prefix in imports
+3. **"AttributeError: 'MockEnv' object has no attribute 'env'"** - Use complete MockEnv class implementation
+4. **Import path resolution errors** - Follow the exact import patterns from working test files
+
+**Proactive Test Validation**: Read each individual unit test and flag any that will fail due to these common error patterns. Fix them before committing.
 
 ### File Organization Requirements
 
