@@ -77,215 +77,236 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
 
     def _fetch_cloudradar_resources(self, api_connector: OauthApi, resource_type: str) -> List[Dict]:
         """Fetch resources from CloudRadar API for a specific resource type"""
-        all_resources = []
-        next_record_key = None
-        
-        while True:
-            try:
-                headers = {
-                    "Accept": "application/json;v=1",
-                    "Authorization": api_connector.api_token,
-                    "Content-Type": "application/json"
-                }
+        return _fetch_cloudradar_resources(api_connector, resource_type)
+
+def _fetch_cloudradar_resources(api_connector: OauthApi, resource_type: str) -> List[Dict]:
+    """Fetch resources from CloudRadar API for a specific resource type"""
+    all_resources = []
+    next_record_key = None
+    
+    while True:
+        try:
+            headers = {
+                "Accept": "application/json;v=1",
+                "Authorization": api_connector.api_token,
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "searchParameters": [{"resourceType": resource_type}],
+                "responseFields": [
+                    "accountName", "accountResourceId", "amazonResourceName", "resourceId", 
+                    "resourceType", "configurationList", "configuration.keyManager", 
+                    "configuration.keyState", "configuration.origin", "configuration.metadataOptions",
+                    "supplementaryConfiguration", "supplementaryConfiguration.KeyRotationStatus", "source"
+                ]
+            }
+            
+            params = {"limit": 10000}
+            if next_record_key:
+                params["nextRecordKey"] = next_record_key
+            
+            response = api_connector.send_request(
+                url="",
+                request_type="post",
+                request_kwargs={
+                    "headers": headers,
+                    "json": payload,
+                    "params": params,
+                    "timeout": 120
+                },
+                retry_delay=5,
+                max_retries=3
+            )
+            
+            if response.status_code != 200:
+                raise RuntimeError(f"API request failed: {response.status_code} - {response.text}")
+            
+            data = response.json()
+            resources = data.get("resourceConfigurations", [])
+            all_resources.extend(resources)
+            
+            next_record_key = data.get("nextRecordKey")
+            if not next_record_key:
+                break
                 
-                payload = {
-                    "searchParameters": [{"resourceType": resource_type}],
-                    "responseFields": [
-                        "accountName", "accountResourceId", "amazonResourceName", "resourceId", 
-                        "resourceType", "configurationList", "configuration.keyManager", 
-                        "configuration.keyState", "configuration.origin", "configuration.metadataOptions",
-                        "supplementaryConfiguration", "supplementaryConfiguration.KeyRotationStatus", "source"
-                    ]
-                }
-                
-                params = {"limit": 10000}
-                if next_record_key:
-                    params["nextRecordKey"] = next_record_key
-                
-                response = api_connector.send_request(
-                    url="",
-                    request_type="post",
-                    request_kwargs={
-                        "headers": headers,
-                        "json": payload,
-                        "params": params,
-                        "timeout": 120
-                    },
-                    retry_delay=5,
-                    max_retries=3
-                )
-                
-                if response.status_code != 200:
-                    raise RuntimeError(f"API request failed: {response.status_code} - {response.text}")
-                
-                data = response.json()
-                resources = data.get("resourceConfigurations", [])
-                all_resources.extend(resources)
-                
-                next_record_key = data.get("nextRecordKey")
-                if not next_record_key:
-                    break
-                    
-            except Exception as e:
-                raise RuntimeError(f"Failed to fetch {resource_type} resources from API: {str(e)}")
-        
-        return all_resources
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch {resource_type} resources from API: {str(e)}")
+    
+    return all_resources
 
     def _fetch_resources_by_type(self, api_connector: OauthApi, required_controls: List[str]) -> Dict[str, List[Dict]]:
         """Efficiently fetch all required resource types with minimal API calls"""
-        # Determine unique resource types needed
-        resource_types = list(set(
-            CONTROL_CONFIGS[control_id]["resource_type"] 
-            for control_id in required_controls 
-            if control_id in CONTROL_CONFIGS
-        ))
-        
-        resources_by_type = {}
-        for resource_type in resource_types:
-            resources_by_type[resource_type] = self._fetch_cloudradar_resources(api_connector, resource_type)
-        
-        return resources_by_type
+        return _fetch_resources_by_type(api_connector, required_controls)
+    
+def _fetch_resources_by_type(api_connector: OauthApi, required_controls: List[str]) -> Dict[str, List[Dict]]:
+    """Efficiently fetch all required resource types with minimal API calls"""
+    # Determine unique resource types needed
+    resource_types = list(set(
+        CONTROL_CONFIGS[control_id]["resource_type"] 
+        for control_id in required_controls 
+        if control_id in CONTROL_CONFIGS
+    ))
+    
+    resources_by_type = {}
+    for resource_type in resource_types:
+        resources_by_type[resource_type] = _fetch_cloudradar_resources(api_connector, resource_type)
+    
+    return resources_by_type
 
     def _apply_resource_exclusions(self, resources: List[Dict], control_config: Dict) -> List[Dict]:
         """Apply control-specific resource exclusions"""
-        filtered_resources = []
-        
-        for resource in resources:
-            exclude = False
-            
-            # Check for orphaned resources
-            if resource.get("source") == "CT-AccessDenied":
-                exclude = True
-                continue
-            
-            # Apply KMS-specific exclusions if needed
-            if control_config["apply_kms_exclusions"]:
-                config_list = resource.get("configurationList", [])
-                key_state = None
-                key_manager = None
-                
-                for config in config_list:
-                    config_name = config.get("configurationName")
-                    config_value = config.get("configurationValue")
-                    
-                    if config_name == "configuration.keyState":
-                        key_state = config_value
-                    elif config_name == "configuration.keyManager":
-                        key_manager = config_value
-                
-                # Exclude pending deletion and AWS-managed keys
-                if key_state in ["PendingDeletion", "PendingReplicaDeletion"]:
-                    exclude = True
-                elif key_manager == "AWS":
-                    exclude = True
-            
-            if not exclude:
-                filtered_resources.append(resource)
-        
-        return filtered_resources
+        return _apply_resource_exclusions(resources, control_config)
 
     def _get_config_value(self, resource: Dict, control_config: Dict) -> str:
         """Extract configuration value based on control configuration"""
-        config_key = control_config["config_key"]
-        config_location = control_config["config_location"]
+        return _get_config_value(resource, control_config)
+
+def _apply_resource_exclusions(resources: List[Dict], control_config: Dict) -> List[Dict]:
+    """Apply control-specific resource exclusions"""
+    filtered_resources = []
+    
+    for resource in resources:
+        exclude = False
         
-        if config_location == "supplementaryConfiguration":
-            # Handle supplementaryConfiguration array
-            supp_config = resource.get("supplementaryConfiguration", [])
-            config_item = next((c for c in supp_config 
-                              if c.get("supplementaryConfigurationName") == config_key), None)
-            return config_item.get("supplementaryConfigurationValue") if config_item else None
+        # Check for orphaned resources
+        if resource.get("source") == "CT-AccessDenied":
+            exclude = True
+            continue
         
-        elif config_location == "configurationList":
-            # Handle configurationList array
+        # Apply KMS-specific exclusions if needed
+        if control_config["apply_kms_exclusions"]:
             config_list = resource.get("configurationList", [])
-            config_item = next((c for c in config_list 
-                              if c.get("configurationName") == config_key), None)
-            return config_item.get("configurationValue") if config_item else None
+            key_state = None
+            key_manager = None
+            
+            for config in config_list:
+                config_name = config.get("configurationName")
+                config_value = config.get("configurationValue")
+                
+                if config_name == "configuration.keyState":
+                    key_state = config_value
+                elif config_name == "configuration.keyManager":
+                    key_manager = config_value
+            
+            # Exclude pending deletion and AWS-managed keys
+            if key_state in ["PendingDeletion", "PendingReplicaDeletion"]:
+                exclude = True
+            elif key_manager == "AWS":
+                exclude = True
         
-        return None
+        if not exclude:
+            filtered_resources.append(resource)
+    
+    return filtered_resources
+
+def _get_config_value(resource: Dict, control_config: Dict) -> str:
+    """Extract configuration value based on control configuration"""
+    config_key = control_config["config_key"]
+    config_location = control_config["config_location"]
+    
+    if config_location == "supplementaryConfiguration":
+        # Handle supplementaryConfiguration array
+        supp_config = resource.get("supplementaryConfiguration", [])
+        config_item = next((c for c in supp_config 
+                          if c.get("supplementaryConfigurationName") == config_key), None)
+        return config_item.get("supplementaryConfigurationValue") if config_item else None
+    
+    elif config_location == "configurationList":
+        # Handle configurationList array
+        config_list = resource.get("configurationList", [])
+        config_item = next((c for c in config_list 
+                          if c.get("configurationName") == config_key), None)
+        return config_item.get("configurationValue") if config_item else None
+    
+    return None
 
     def _calculate_control_compliance(self, control_id: str, control_thresholds: pd.DataFrame, 
                                     resources: List[Dict], control_config: Dict) -> List[Dict]:
         """Calculate compliance metrics for a specific control"""
-        now = datetime.now()
-        results = []
+        return _calculate_control_compliance(control_id, control_thresholds, resources, control_config)
+
+def _calculate_control_compliance(control_id: str, control_thresholds: pd.DataFrame, 
+                                resources: List[Dict], control_config: Dict) -> List[Dict]:
+    """Calculate compliance metrics for a specific control"""
+    now = datetime.now()
+    results = []
+    
+    # Apply resource exclusions
+    filtered_resources = _apply_resource_exclusions(resources, control_config)
+    
+    # Process each threshold (Tier 1 and Tier 2)
+    for _, threshold in control_thresholds.iterrows():
+        metric_id = threshold["monitoring_metric_id"]
+        tier = threshold.get("monitoring_metric_tier", "")
         
-        # Apply resource exclusions
-        filtered_resources = self._apply_resource_exclusions(resources, control_config)
+        compliant_count = 0
+        total_count = len(filtered_resources)
+        non_compliant_resources = []
         
-        # Process each threshold (Tier 1 and Tier 2)
-        for _, threshold in control_thresholds.iterrows():
-            metric_id = threshold["monitoring_metric_id"]
-            tier = threshold.get("monitoring_metric_tier", "")
+        for resource in filtered_resources:
+            config_value = _get_config_value(resource, control_config)
+            is_compliant = False
             
-            compliant_count = 0
-            total_count = len(filtered_resources)
-            non_compliant_resources = []
-            
-            for resource in filtered_resources:
-                config_value = self._get_config_value(resource, control_config)
-                is_compliant = False
-                
-                if "Tier 1" in tier:
-                    # Tier 1: Check if configuration exists and has value
-                    is_compliant = config_value is not None and str(config_value).strip()
-                elif "Tier 2" in tier:
-                    # Tier 2: Check if configuration equals expected value (only for resources with config)
-                    if config_value is not None and str(config_value).strip():
-                        is_compliant = str(config_value) == control_config["expected_value"]
-                    else:
-                        # Skip resources without configuration for Tier 2
-                        total_count -= 1
-                        continue
-                
-                if is_compliant:
-                    compliant_count += 1
+            if "Tier 1" in tier:
+                # Tier 1: Check if configuration exists and has value
+                is_compliant = config_value is not None and str(config_value).strip()
+            elif "Tier 2" in tier:
+                # Tier 2: Check if configuration equals expected value (only for resources with config)
+                if config_value is not None and str(config_value).strip():
+                    is_compliant = str(config_value) == control_config["expected_value"]
                 else:
-                    # Collect non-compliant resource info
-                    non_compliant_info = {
-                        "resourceId": resource.get("resourceId", "N/A"),
-                        "accountResourceId": resource.get("accountResourceId", "N/A"),
-                        "configValue": config_value if config_value else "N/A (Not Found)"
-                    }
-                    
-                    # Add resource-specific info
-                    if control_config["apply_kms_exclusions"]:
-                        config_list = resource.get("configurationList", [])
-                        key_state = next((c.get("configurationValue") for c in config_list 
-                                        if c.get("configurationName") == "configuration.keyState"), "N/A")
-                        non_compliant_info["keyState"] = key_state
-                    
-                    non_compliant_resources.append(non_compliant_info)
+                    # Skip resources without configuration for Tier 2
+                    total_count -= 1
+                    continue
             
-            # Calculate compliance metrics
-            compliance_percentage = (compliant_count / total_count * 100) if total_count > 0 else 0
-            
-            # Determine compliance status
-            alert_threshold = threshold.get("alerting_threshold", 95.0)
-            warning_threshold = threshold.get("warning_threshold", 97.0)
-            
-            if compliance_percentage >= alert_threshold:
-                compliance_status = "Green"
-            elif compliance_percentage >= warning_threshold:
-                compliance_status = "Yellow"
+            if is_compliant:
+                compliant_count += 1
             else:
-                compliance_status = "Red"
-            
-            # Format output with standard fields
-            result = {
-                "control_monitoring_utc_timestamp": now,
-                "control_id": control_id,
-                "monitoring_metric_id": metric_id,
-                "monitoring_metric_value": float(compliance_percentage),
-                "monitoring_metric_status": compliance_status,
-                "metric_value_numerator": int(compliant_count),
-                "metric_value_denominator": int(total_count),
-                "resources_info": [json.dumps(resource) for resource in non_compliant_resources[:50]] if non_compliant_resources else None
-            }
-            results.append(result)
+                # Collect non-compliant resource info
+                non_compliant_info = {
+                    "resourceId": resource.get("resourceId", "N/A"),
+                    "accountResourceId": resource.get("accountResourceId", "N/A"),
+                    "configValue": config_value if config_value else "N/A (Not Found)"
+                }
+                
+                # Add resource-specific info
+                if control_config["apply_kms_exclusions"]:
+                    config_list = resource.get("configurationList", [])
+                    key_state = next((c.get("configurationValue") for c in config_list 
+                                    if c.get("configurationName") == "configuration.keyState"), "N/A")
+                    non_compliant_info["keyState"] = key_state
+                
+                non_compliant_resources.append(non_compliant_info)
         
-        return results
+        # Calculate compliance metrics
+        compliance_percentage = (compliant_count / total_count * 100) if total_count > 0 else 0
+        
+        # Determine compliance status
+        alert_threshold = threshold.get("alerting_threshold", 95.0)
+        warning_threshold = threshold.get("warning_threshold", 97.0)
+        
+        if compliance_percentage >= alert_threshold:
+            compliance_status = "Green"
+        elif compliance_percentage >= warning_threshold:
+            compliance_status = "Yellow"
+        else:
+            compliance_status = "Red"
+        
+        # Format output with standard fields
+        result = {
+            "control_monitoring_utc_timestamp": now,
+            "control_id": control_id,
+            "monitoring_metric_id": metric_id,
+            "monitoring_metric_value": float(compliance_percentage),
+            "monitoring_metric_status": compliance_status,
+            "metric_value_numerator": int(compliant_count),
+            "metric_value_denominator": int(total_count),
+            "resources_info": [json.dumps(resource) for resource in non_compliant_resources[:50]] if non_compliant_resources else None
+        }
+        results.append(result)
+    
+    return results
 
 @transformer
 def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
@@ -310,8 +331,7 @@ def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> 
     
     # Step 3: Efficiently fetch all required resource types
     required_controls = list(control_groups.groups.keys())
-    pipeline = PLAutomatedMonitoringCloudradarControls(None)  # Create instance for helper methods
-    all_resources = pipeline._fetch_resources_by_type(api_connector, required_controls)
+    all_resources = _fetch_resources_by_type(api_connector, required_controls)
     
     # Step 4: Process each control with its specific configuration
     all_results = []
@@ -328,7 +348,7 @@ def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> 
         resources = all_resources.get(resource_type, [])
         
         # Calculate compliance for this control
-        control_results = pipeline._calculate_control_compliance(
+        control_results = _calculate_control_compliance(
             control_id, control_thresholds, resources, control_config
         )
         all_results.extend(control_results)

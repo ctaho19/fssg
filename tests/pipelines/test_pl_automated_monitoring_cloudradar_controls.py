@@ -1,12 +1,12 @@
 import pytest
 import pandas as pd
 from unittest.mock import Mock, patch
+import unittest.mock as mock
 from freezegun import freeze_time
 from datetime import datetime
 from requests import Response, RequestException
 
 # Import pipeline components
-import pipelines.pl_automated_monitoring_cloudradar_controls.pipeline as pipeline
 from pipelines.pl_automated_monitoring_cloudradar_controls.pipeline import (
     PLAutomatedMonitoringCloudradarControls,
     calculate_metrics,
