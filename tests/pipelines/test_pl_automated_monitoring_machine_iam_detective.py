@@ -1,12 +1,12 @@
 import pytest
 import pandas as pd
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from freezegun import freeze_time
 from datetime import datetime
 import json
 import requests
 
-from pl_automated_monitoring_machine_iam_detective.pipeline import (
+from pipelines.pl_automated_monitoring_machine_iam_detective.pipeline import (
     PLAutomatedMonitoringMachineIamDetective,
     calculate_metrics,
     _get_approved_accounts,
@@ -171,7 +171,7 @@ def generate_mock_accounts_response():
     }
 
 @freeze_time("2024-11-05 12:09:00")
-def test_calculate_metrics_success(mock):
+def test_calculate_metrics_success():
     """Test successful metrics calculation"""
     # Setup test data
     thresholds_df = _mock_threshold_df()
@@ -190,7 +190,7 @@ def test_calculate_metrics_success(mock):
     context = {"api_connector": mock_api}
     
     # Mock the _get_approved_accounts function
-    with mock.patch('pl_automated_monitoring_machine_iam_detective.pipeline._get_approved_accounts', 
+    with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline._get_approved_accounts', 
                     return_value=["123456789012", "987654321098"]):
         # Execute transformer
         result = calculate_metrics(thresholds_df, all_iam_roles_df, evaluated_roles_df, sla_data_df, context)
@@ -220,7 +220,7 @@ def test_calculate_metrics_empty_thresholds():
     with pytest.raises(RuntimeError, match="No threshold data found"):
         calculate_metrics(empty_df, all_iam_roles_df, evaluated_roles_df, sla_data_df, context)
 
-def test_get_approved_accounts_success(mock):
+def test_get_approved_accounts_success():
     """Test successful account fetching"""
     mock_session = Mock()
     mock_response = Mock()
@@ -230,24 +230,24 @@ def test_get_approved_accounts_success(mock):
     
     mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
     
-    with mock.patch('requests.Session', return_value=mock_session):
+    with patch('requests.Session', return_value=mock_session):
         accounts = _get_approved_accounts(mock_api)
     
     assert accounts == ["123456789012", "987654321098"]
     assert len(accounts) == 2
 
-def test_get_approved_accounts_api_error(mock):
+def test_get_approved_accounts_api_error():
     """Test API error handling"""
     mock_session = Mock()
     mock_session.get.side_effect = requests.exceptions.RequestException("Connection error")
     
     mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
     
-    with mock.patch('requests.Session', return_value=mock_session):
+    with patch('requests.Session', return_value=mock_session):
         with pytest.raises(RuntimeError, match="Failed to fetch approved accounts"):
             _get_approved_accounts(mock_api)
 
-def test_get_approved_accounts_empty_response(mock):
+def test_get_approved_accounts_empty_response():
     """Test empty accounts response"""
     mock_session = Mock()
     mock_response = Mock()
@@ -257,7 +257,7 @@ def test_get_approved_accounts_empty_response(mock):
     
     mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
     
-    with mock.patch('requests.Session', return_value=mock_session):
+    with patch('requests.Session', return_value=mock_session):
         with pytest.raises(ValueError, match="No valid account numbers received"):
             _get_approved_accounts(mock_api)
 
@@ -338,19 +338,18 @@ def test_pipeline_initialization():
     assert hasattr(pipeline, 'api_url')
     assert "api.cloud.capitalone.com" in pipeline.api_url
 
-def test_pipeline_run_method(mock):
+def test_pipeline_run_method():
     """Test pipeline run method with default parameters"""
     env = MockEnv()
     pipeline = PLAutomatedMonitoringMachineIamDetective(env)
     
     # Mock the run method
-    mock_run = mock.patch.object(pipeline, 'run')
-    pipeline.run()
-    
-    # Verify run was called with default parameters
-    mock_run.assert_called_once_with()
+    with patch.object(pipeline, 'run') as mock_run:
+        pipeline.run()
+        # Verify run was called with default parameters
+        mock_run.assert_called_once_with()
 
-def test_api_error_handling(mock):
+def test_api_error_handling():
     """Test API error handling and exception wrapping"""
     thresholds_df = _mock_threshold_df()
     all_iam_roles_df = _mock_all_iam_roles_df()
@@ -367,23 +366,23 @@ def test_api_error_handling(mock):
     with pytest.raises(RuntimeError, match="Failed to fetch approved accounts"):
         calculate_metrics(thresholds_df, all_iam_roles_df, evaluated_roles_df, sla_data_df, context)
 
-def test_main_function_execution(mock):
+def test_main_function_execution():
     """Test main function execution path"""
-    mock_env = mock.Mock()
+    mock_env = Mock()
     
-    with mock.patch("etip_env.set_env_vars", return_value=mock_env):
-        with mock.patch("pl_automated_monitoring_machine_iam_detective.pipeline.run") as mock_run:
-            with mock.patch("sys.exit") as mock_exit:
+    with patch("etip_env.set_env_vars", return_value=mock_env):
+        with patch("pipelines.pl_automated_monitoring_machine_iam_detective.pipeline.run") as mock_run:
+            with patch("sys.exit") as mock_exit:
                 # Execute main block
                 code = """
 if True:
     from etip_env import set_env_vars
-    from pl_automated_monitoring_machine_iam_detective.pipeline import run
+    from pipelines.pl_automated_monitoring_machine_iam_detective.pipeline import run
     
     env = set_env_vars()
     try:
         run(env=env, is_load=False, dq_actions=False)
-    except Exception as e:
+    except Exception:
         import sys
         sys.exit(1)
 """
@@ -403,7 +402,7 @@ def test_empty_data_handling():
     mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
     context = {"api_connector": mock_api}
     
-    with mock.patch('pl_automated_monitoring_machine_iam_detective.pipeline._get_approved_accounts', 
+    with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline._get_approved_accounts', 
                     return_value=["123456789012"]):
         result = calculate_metrics(thresholds_df, empty_roles_df, empty_evaluated_df, empty_sla_df, context)
         
@@ -440,9 +439,9 @@ def test_compliance_status_logic():
         mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
         context = {"api_connector": mock_api}
         
-        with mock.patch('pl_automated_monitoring_machine_iam_detective.pipeline._get_approved_accounts', 
+        with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline._get_approved_accounts', 
                         return_value=["123456789012"]):
-            with mock.patch('pl_automated_monitoring_machine_iam_detective.pipeline._calculate_tier1_metrics',
+            with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline._calculate_tier1_metrics',
                             return_value=(metric_value, 96, 100, None)):
                 result = calculate_metrics(thresholds_df, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), context)
                 

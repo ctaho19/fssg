@@ -1119,6 +1119,7 @@ where
 ```python
 # ❌ BAD
 from etip_env import set_env_vars  # Not used anywhere
+import os  # Imported but never used
 
 # ✅ GOOD - Remove unused import or use it
 if __name__ == "__main__":
@@ -1133,7 +1134,19 @@ def calculate_metrics(thresholds_raw, context):
     thresholds = thresholds_raw.to_dict("records")  # Never used
     return pd.DataFrame([])
 
-# ✅ GOOD
+# ❌ BAD - Unused exception variable
+try:
+    run(env=env, is_load=False, dq_actions=False)
+except Exception as e:  # Variable 'e' assigned but never used
+    import sys
+    sys.exit(1)
+
+# ❌ BAD - Unused assignment in tests
+def test_ssl_context_handling():
+    connector = pipeline._get_api_connector()  # Variable assigned but never used
+    mock_ssl.assert_called_once()
+
+# ✅ GOOD - Use the variable or remove assignment
 def calculate_metrics(thresholds_raw, context):
     thresholds = thresholds_raw.to_dict("records")
     results = []
@@ -1141,7 +1154,50 @@ def calculate_metrics(thresholds_raw, context):
         # Process threshold
         pass
     return pd.DataFrame(results)
+
+# ✅ GOOD - Don't capture exception if not needed
+try:
+    run(env=env, is_load=False, dq_actions=False)
+except Exception:  # No variable assignment
+    import sys
+    sys.exit(1)
+
+# ✅ GOOD - Remove unused assignment
+def test_ssl_context_handling():
+    pipeline._get_api_connector()  # Method called but result not stored
+    mock_ssl.assert_called_once()
 ```
+
+**Critical Linting Patterns to Check Before Commit:**
+
+1. **Exception Handlers**: If you don't use the exception variable in the handler, don't capture it:
+   ```python
+   # ❌ BAD
+   except Exception as e:
+       sys.exit(1)  # 'e' never used
+   
+   # ✅ GOOD  
+   except Exception:
+       sys.exit(1)
+   ```
+
+2. **Test Assignments**: Don't assign method return values if you don't use them:
+   ```python
+   # ❌ BAD
+   result = some_method_call()  # 'result' never used
+   
+   # ✅ GOOD
+   some_method_call()  # Call method without assignment
+   ```
+
+3. **Import Cleanup**: Remove any imports that become unused after refactoring:
+   ```python
+   # ❌ BAD - Left over from previous implementation
+   import os  # Was used before but not anymore
+   
+   # ✅ GOOD - Remove completely
+   # (no import line)
+   ```
 
 ### Automated Code Quality Checklist
 

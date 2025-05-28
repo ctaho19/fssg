@@ -27,28 +27,30 @@ environments:
             avro_schema: "@json:avro_schema.json"
             business_application: BAENTERPRISETECHINSIGHTS
 
-  local:
+  qa: &nonprod_config
     extract:
       thresholds_raw:
         connector: snowflake
         options:
-          sql: "@text:sql/monitoring_thresholds.sql"
+          sql: "@text:sql/monitoring_thresholds_qa.sql"
       all_iam_roles:
         connector: snowflake
         options:
-          sql: "@text:sql/all_iam_roles.sql"
+          sql: "@text:sql/all_iam_roles_qa.sql"
       evaluated_roles:
         connector: snowflake
         options:
-          sql: "@text:sql/evaluated_roles.sql"
+          sql: "@text:sql/evaluated_roles_qa.sql"
     load:
       monitoring_metrics:
         - connector: onestream
           options:
-            table_name: etip_controls_monitoring_metrics
+            table_name: fact_controls_monitoring_metrics_daily_v4
             file_type: AVRO
-            avro_schema: "@json:avro_schema.json"
+            avro_schema: "@json:avro_schema_qa.json"
             business_application: BAENTERPRISETECHINSIGHTS
+
+  local: *nonprod_config
 
 # REQUIRED: Comprehensive Data Quality Validation
 ingress_validation:
@@ -56,7 +58,7 @@ ingress_validation:
     - type: schema_check
       fatal: false
       informational: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         required_columns:
           - monitoring_metric_id
@@ -69,14 +71,14 @@ ingress_validation:
           - control_executor
     - type: count_check
       fatal: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         data_location: Snowflake
         threshold: 1
     - type: consistency_check
       fatal: false
       informational: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         check_type: "data_freshness"
         description: "Ingress data quality check"
@@ -85,7 +87,7 @@ ingress_validation:
     - type: schema_check
       fatal: false
       informational: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         required_columns:
           - RESOURCE_ID
@@ -100,14 +102,14 @@ ingress_validation:
           - LOAD_TIMESTAMP
     - type: count_check
       fatal: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         data_location: Snowflake
         threshold: 1
     - type: consistency_check
       fatal: false
       informational: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         description: "IAM roles data quality check"
 
@@ -115,7 +117,7 @@ ingress_validation:
     - type: schema_check
       fatal: false
       informational: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         required_columns:
           - RESOURCE_NAME
@@ -124,14 +126,14 @@ ingress_validation:
     - type: count_check
       fatal: false
       informational: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         data_location: Snowflake
         threshold: 1
     - type: consistency_check
       fatal: false
       informational: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         description: "Evaluated roles data quality check"
 
@@ -140,7 +142,7 @@ egress_validation:
     - type: schema_check
       fatal: false
       informational: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         required_columns:
           - control_monitoring_utc_timestamp
@@ -153,10 +155,10 @@ egress_validation:
     - type: count_check
       fatal: false
       informational: true
-      envs: [local, prod]
+      envs: [qa, prod]
     - type: consistency_check
       fatal: false
       informational: true
-      envs: [local, prod]
+      envs: [qa, prod]
       options:
         description: "Egress data will not match ingress data due to API enrichment and metric calculations"
