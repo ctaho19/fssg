@@ -15,4 +15,4 @@ from
     etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
 where 
     metric_threshold_end_date is null
-    and control_id = 'CTRL-1079134'
+    and control_id in ('CTRL-1105806', 'CTRL-1077124')

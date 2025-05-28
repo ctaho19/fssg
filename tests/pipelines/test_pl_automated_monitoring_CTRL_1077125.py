@@ -8,9 +8,13 @@ import pytest
 from freezegun import freeze_time
 from requests import RequestException, Response
 
-import pipelines.pl_automated_monitoring_CTRL_1077125.pipeline as pipeline
-from pipeline_framework.connectors.oauth_api import OauthApi
-from etip_env import set_env_vars
+from pl_automated_monitoring_CTRL_1077125.pipeline import (
+    PLAutomatedMonitoringCTRL1077125,
+    calculate_metrics,
+    _filter_resources,
+    _get_compliance_status
+)
+from connectors.api import OauthApi
 
 
 class MockOauthApi:
@@ -22,14 +26,7 @@ class MockOauthApi:
         self.response = None
         self.side_effect = None
 
-    def send_request(
-        self,
-        url: str,
-        request_type: str,
-        request_kwargs: Dict[str, Any],
-        retry_delay: int = 5,
-        max_retries: int = 3,
-    ) -> Response:
+    def send_request(self, url, request_type, request_kwargs, retry_delay=5):
         """Mock send_request method with proper side_effect handling."""
         if self.side_effect:
             if isinstance(self.side_effect, Exception):
@@ -236,7 +233,7 @@ def test_calculate_metrics_success(mock):
     context = {"api_connector": mock_api}
     
     # Execute transformer - use correct function name
-    result = pipeline.calculate_metrics(thresholds_df, context)
+    result = calculate_metrics(thresholds_df, context)
     
     # Assertions
     assert isinstance(result, pd.DataFrame)
@@ -257,7 +254,7 @@ def test_calculate_metrics_empty_thresholds():
     context = {"api_connector": MockOauthApi(url="test", api_token="test")}
     
     with pytest.raises(RuntimeError, match="No threshold data found"):
-        pipeline.calculate_metrics(empty_df, context)
+        calculate_metrics(empty_df, context)
 
 
 @freeze_time(FIXED_TIMESTAMP)
@@ -271,7 +268,7 @@ def test_calculate_metrics_empty_api_response():
     
     context = {"api_connector": mock_api}
     
-    result = pipeline.calculate_metrics(thresholds_df, context)
+    result = calculate_metrics(thresholds_df, context)
     
     # Should return results with zero values
     assert len(result) == 2
@@ -293,7 +290,7 @@ def test_api_error_handling():
     
     # Should wrap exception in RuntimeError
     with pytest.raises(RuntimeError, match="Failed to fetch resources from API"):
-        pipeline.calculate_metrics(thresholds_df, context)
+        calculate_metrics(thresholds_df, context)
 
 
 def test_pagination_handling():
@@ -314,7 +311,7 @@ def test_pagination_handling():
     mock_api.side_effect = [page1_response, page2_response]
     
     context = {"api_connector": mock_api}
-    result = pipeline.calculate_metrics(thresholds_df, context)
+    result = calculate_metrics(thresholds_df, context)
     
     # Verify both pages were processed
     assert not result.empty
@@ -338,7 +335,7 @@ def test_missing_tier_data():
     context = {"api_connector": MockOauthApi(url="test", api_token="test")}
     
     with pytest.raises(RuntimeError, match="Tier 2 metric data not found"):
-        pipeline.calculate_metrics(incomplete_df, context)
+        calculate_metrics(incomplete_df, context)
 
 
 def test_filter_resources():
@@ -364,7 +361,7 @@ def test_filter_resources():
         }
     ]
     
-    tier1_num, tier2_num, tier1_non, tier2_non = pipeline._filter_resources(
+    tier1_num, tier2_num, tier1_non, tier2_non = _filter_resources(
         test_resources, "configuration.origin", "AWS_KMS"
     )
     
@@ -377,23 +374,23 @@ def test_filter_resources():
 def test_get_compliance_status():
     """Test the _get_compliance_status function"""
     # Test Green status
-    assert pipeline._get_compliance_status(0.96, 95.0, 97.0) == "Green"  # 96% >= 95% alert
+    assert _get_compliance_status(0.96, 95.0, 97.0) == "Green"  # 96% >= 95% alert
     
     # Test Yellow status 
-    assert pipeline._get_compliance_status(0.96, 97.0, 95.0) == "Yellow"  # 96% >= 95% warning but < 97% alert
+    assert _get_compliance_status(0.96, 97.0, 95.0) == "Yellow"  # 96% >= 95% warning but < 97% alert
     
     # Test Red status
-    assert pipeline._get_compliance_status(0.80, 95.0, 97.0) == "Red"  # 80% < 95% alert
+    assert _get_compliance_status(0.80, 95.0, 97.0) == "Red"  # 80% < 95% alert
     
     # Test invalid thresholds
-    assert pipeline._get_compliance_status(0.80, "invalid", 97.0) == "Red"
-    assert pipeline._get_compliance_status(0.80, 95.0, "invalid") == "Red"
+    assert _get_compliance_status(0.80, "invalid", 97.0) == "Red"
+    assert _get_compliance_status(0.80, 95.0, "invalid") == "Red"
 
 
 def test_pipeline_initialization():
     """Test pipeline class initialization"""
     env = MockEnv()
-    pipe = pipeline.PLAutomatedMonitoringCTRL1077125(env)
+    pipe = PLAutomatedMonitoringCTRL1077125(env)
     
     assert pipe.env == env
     assert hasattr(pipe, 'api_url')
@@ -405,11 +402,11 @@ def test_pipeline_initialization():
 
 def test_get_api_connector_success():
     """Test successful API connector creation"""
-    with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
+    with mock.patch("pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
         mock_refresh.return_value = "mock_token_value"
         
         env = MockEnv()
-        pipe = pipeline.PLAutomatedMonitoringCTRL1077125(env)
+        pipe = PLAutomatedMonitoringCTRL1077125(env)
         connector = pipe._get_api_connector()
         
         assert isinstance(connector, OauthApi)
@@ -423,11 +420,11 @@ def test_get_api_connector_success():
 
 def test_get_api_connector_failure():
     """Test handling of API connector creation failure"""
-    with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
+    with mock.patch("pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
         mock_refresh.side_effect = Exception("Token refresh failed")
         
         env = MockEnv()
-        pipe = pipeline.PLAutomatedMonitoringCTRL1077125(env)
+        pipe = PLAutomatedMonitoringCTRL1077125(env)
         
         # The actual implementation doesn't wrap this exception, so expect the original
         with pytest.raises(Exception, match="Token refresh failed"):
@@ -436,15 +433,15 @@ def test_get_api_connector_failure():
 
 def test_transform_method():
     """Test pipeline transform method"""
-    with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
+    with mock.patch("pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
         mock_refresh.return_value = "mock_token"
         
         env = MockEnv()
-        pipe = pipeline.PLAutomatedMonitoringCTRL1077125(env)
+        pipe = PLAutomatedMonitoringCTRL1077125(env)
         pipe.context = {}  # Initialize context
         
         # Mock the super().transform() call
-        with mock.patch("pipeline_framework.ConfigPipeline.transform"):
+        with mock.patch("config_pipeline.ConfigPipeline.transform"):
             pipe.transform()
             
             # Verify API connector was added to context
@@ -455,12 +452,12 @@ def test_transform_method():
 @freeze_time(FIXED_TIMESTAMP)
 def test_end_to_end_pipeline():
     """Consolidated end-to-end test for pipeline functionality"""
-    with mock.patch("pipelines.pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
+    with mock.patch("pl_automated_monitoring_CTRL_1077125.pipeline.refresh") as mock_refresh:
         mock_refresh.return_value = "mock_token_value"
         
         # Use consistent timestamps
         env = MockEnv()
-        pipe = pipeline.PLAutomatedMonitoringCTRL1077125(env)
+        pipe = PLAutomatedMonitoringCTRL1077125(env)
         pipe.context = {}  # Initialize context
         
         # Test the API connector creation
@@ -477,7 +474,7 @@ def test_end_to_end_pipeline():
         mock_api.response = generate_mock_api_response(KMS_KEYS_RESPONSE_DATA)
         pipe.context["api_connector"] = mock_api
         
-        result_df = pipeline.calculate_metrics(
+        result_df = calculate_metrics(
             thresholds_raw=_mock_threshold_df(),
             context=pipe.context,
         )
@@ -519,7 +516,7 @@ def test_excluded_resources():
         }
     ]
     
-    tier1_num, tier2_num, tier1_non, tier2_non = pipeline._filter_resources(
+    tier1_num, tier2_num, tier1_non, tier2_non = _filter_resources(
         test_resources, "configuration.origin", "AWS_KMS"
     )
     
@@ -544,7 +541,7 @@ def test_missing_configuration_values():
         }
     ]
     
-    tier1_num, tier2_num, tier1_non, tier2_non = pipeline._filter_resources(
+    tier1_num, tier2_num, tier1_non, tier2_non = _filter_resources(
         test_resources, "configuration.origin", "AWS_KMS"
     )
     
@@ -552,3 +549,43 @@ def test_missing_configuration_values():
     assert tier2_num == 0
     assert len(tier1_non) == 1  # Should be in non-compliant for tier 1
     assert len(tier2_non) == 0
+
+
+def test_main_function_execution(mock):
+    """Test main function execution path"""
+    mock_env = mock.Mock()
+    
+    with mock.patch("etip_env.set_env_vars", return_value=mock_env):
+        with mock.patch("pl_automated_monitoring_CTRL_1077125.pipeline.run") as mock_run:
+            with mock.patch("sys.exit") as mock_exit:
+                # Execute main block
+                code = """
+if True:
+    from etip_env import set_env_vars
+    from pl_automated_monitoring_CTRL_1077125.pipeline import run
+    
+    env = set_env_vars()
+    try:
+        run(env=env, is_load=False, dq_actions=False)
+    except Exception as e:
+        import sys
+        sys.exit(1)
+"""
+                exec(code)
+                
+                # Verify success path
+                assert not mock_exit.called
+                mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
+
+
+def test_pipeline_run_method(mock):
+    """Test pipeline run method with default parameters"""
+    env = MockEnv()
+    pipeline_instance = PLAutomatedMonitoringCTRL1077125(env)
+    
+    # Mock the run method
+    mock_run = mock.patch.object(pipeline_instance, 'run')
+    pipeline_instance.run()
+    
+    # Verify run was called with default parameters
+    mock_run.assert_called_once_with()

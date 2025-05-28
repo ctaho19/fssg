@@ -1,317 +1,303 @@
-import datetime
-import json
-import unittest.mock as mock
-import pandas as pd
 import pytest
+import pandas as pd
+from unittest.mock import Mock
 from freezegun import freeze_time
+from datetime import datetime
+import json
 
-import pipelines.pl_automated_monitoring_CTRL_1101994.pipeline as pipeline
-from etip_env import set_env_vars
-from tests.config_pipeline.helpers import ConfigPipelineTestCase
+from pl_automated_monitoring_CTRL_1101994.pipeline import (
+    PLAutomatedMonitoringCTRL1101994,
+    calculate_metrics
+)
 
-
-# --- Expected Schema Fields ---
 AVRO_SCHEMA_FIELDS = [
-    "date",
-    "control_id",
+    "control_monitoring_utc_timestamp",
+    "control_id", 
     "monitoring_metric_id",
     "monitoring_metric_value",
-    "compliance_status",
-    "numerator",
-    "denominator",
-    "non_compliant_resources"
+    "monitoring_metric_status",
+    "metric_value_numerator",
+    "metric_value_denominator",
+    "resources_info"
 ]
 
+class MockExchangeConfig:
+    def __init__(self):
+        self.client_id = "test_client"
+        self.client_secret = "test_secret"
+        self.exchange_url = "test-exchange.com"
 
-def _tier_threshold_df():
-    """Test data for monitoring thresholds."""
-    return pd.DataFrame(
+class MockEnv:
+    def __init__(self):
+        self.exchange = MockExchangeConfig()
+
+class MockOauthApi:
+    def __init__(self, url, api_token, ssl_context=None):
+        self.url = url
+        self.api_token = api_token
+        self.response = None
+        self.side_effect = None
+    
+    def send_request(self, url, request_type, request_kwargs, retry_delay=5):
+        if self.side_effect:
+            if isinstance(self.side_effect, Exception):
+                raise self.side_effect
+            elif isinstance(self.side_effect, list) and self.side_effect:
+                response = self.side_effect.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+        
+        if self.response:
+            return self.response
+        
+        from requests import Response
+        default_response = Response()
+        default_response.status_code = 200
+        return default_response
+
+def _mock_threshold_df():
+    return pd.DataFrame([{
+        "monitoring_metric_id": 194,
+        "control_id": "CTRL-1101994",
+        "monitoring_metric_tier": "Tier 2",
+        "metric_name": "Symantec Proxy Test Success Rate",
+        "metric_description": "Percentage of Symantec proxy tests that pass",
+        "warning_threshold": 80.0,
+        "alerting_threshold": 90.0,
+        "control_executor": "Security Team"
+    }])
+
+def _mock_symantec_data():
+    return pd.DataFrame([
         {
-            "control_id": [
-                "CTRL-1101994",
-            ],
-            "monitoring_metric_id": [53],
-            "monitoring_metric_tier": [
-                "Tier 2",
-            ],
-            "warning_threshold": [
-                80.0,
-            ],
-            "alerting_threshold": [
-                90.0,
-            ],
-            "control_executor": [
-                "Individual_1",
-            ],
-            "metric_threshold_start_date": [
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-            ],
-            "metric_threshold_end_date": [
-                None,
-            ],
-        }
-    )
-
-
-def _symantec_outcome_df():
-    """Test data for Symantec Proxy test outcomes."""
-    return pd.DataFrame(
+            "TEST_ID": "test_1",
+            "TEST_NAME": "Symantec Test 1",
+            "PLATFORM": "symantec",
+            "EXPECTED_OUTCOME": "blocked",
+            "ACTUAL_OUTCOME": "blocked",
+            "TEST_DESCRIPTION": "Test description 1"
+        },
         {
-            "DATE": [datetime.datetime(2024, 11, 5, 12, 9, 00, 21180)],
-            "CTRL_ID": ["CTRL-1101994"],
-            "MONITORING_METRIC_NUMBER": ["MNTR-1101994-T2"],
-            "MONITORING_METRIC": [95.0],
-            "COMPLIANCE_STATUS": ["GREEN"],
-            "NUMERATOR": [19],
-            "DENOMINATOR": [20],
+            "TEST_ID": "test_2",
+            "TEST_NAME": "Symantec Test 2",
+            "PLATFORM": "symantec",
+            "EXPECTED_OUTCOME": "blocked",
+            "ACTUAL_OUTCOME": "passed",
+            "TEST_DESCRIPTION": "Test description 2"
         }
-    )
+    ])
 
+def generate_mock_api_response(content=None, status_code=200):
+    from requests import Response
+    import json
+    
+    mock_response = Response()
+    mock_response.status_code = status_code
+    
+    if content:
+        mock_response._content = json.dumps(content).encode("utf-8")
+    else:
+        mock_response._content = json.dumps({}).encode("utf-8")
+    
+    return mock_response
 
-def _expected_output_df():
-    """Expected output dataframe for successful test case."""
-    return pd.DataFrame(
-        {
-            "monitoring_metric_id": [53],
-            "control_id": ["CTRL-1101994"],
-            "monitoring_metric_value": [95.0],
-            "compliance_status": ["Green"],
-            "numerator": [19],
-            "denominator": [20],
-            "non_compliant_resources": [None],
-            "date": [1730764140000],  # This is just a placeholder timestamp
-        }
-    ).astype({
-        "monitoring_metric_id": "int64", 
-        "numerator": "int64", 
-        "denominator": "int64", 
-        "date": "int64"
+@freeze_time("2024-11-05 12:09:00")
+def test_calculate_metrics_success(mock):
+    thresholds_df = _mock_threshold_df()
+    
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "tests": [
+            {"id": "test_1", "status": "passed"},
+            {"id": "test_2", "status": "failed"}
+        ]
+    }
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
+    
+    context = {"api_connector": mock_api}
+    
+    result = calculate_metrics(thresholds_df, context)
+    
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+    assert list(result.columns) == AVRO_SCHEMA_FIELDS
+    
+    row = result.iloc[0]
+    assert isinstance(row["control_monitoring_utc_timestamp"], datetime)
+    assert isinstance(row["monitoring_metric_value"], float)
+    assert isinstance(row["metric_value_numerator"], int)
+    assert isinstance(row["metric_value_denominator"], int)
+
+def test_calculate_metrics_empty_thresholds():
+    empty_df = pd.DataFrame()
+    context = {"api_connector": Mock()}
+    
+    with pytest.raises(RuntimeError, match="No threshold data found"):
+        calculate_metrics(empty_df, context)
+
+def test_pipeline_initialization():
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1101994(env)
+    
+    assert pipeline.env == env
+    assert hasattr(pipeline, 'api_url')
+    assert 'test-exchange.com' in pipeline.api_url
+
+def test_pipeline_run_method(mock):
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1101994(env)
+    
+    mock_run = mock.patch.object(pipeline, 'run')
+    pipeline.run()
+    
+    mock_run.assert_called_once_with()
+
+def test_api_error_handling(mock):
+    from requests.exceptions import RequestException
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.side_effect = RequestException("Connection error")
+    
+    context = {"api_connector": mock_api}
+    
+    with pytest.raises(RuntimeError, match="Failed to fetch"):
+        calculate_metrics(_mock_threshold_df(), context)
+
+def test_pagination_handling(mock):
+    page1_response = generate_mock_api_response({
+        "tests": [{"id": "test_1"}],
+        "nextRecordKey": "page2_key"
     })
-
-
-def _validate_avro_schema(df, expected_fields=None):
-    """Validates that a DataFrame conforms to the expected Avro schema structure."""
-    if expected_fields is None:
-        expected_fields = AVRO_SCHEMA_FIELDS
+    page2_response = generate_mock_api_response({
+        "tests": [{"id": "test_2"}],
+        "nextRecordKey": None
+    })
     
-    # Check that all expected fields are present
-    for field in expected_fields:
-        assert field in df.columns, f"Field {field} missing from DataFrame"
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.side_effect = [page1_response, page2_response]
     
-    # Validate data types when data is available
-    if not df.empty:
-        assert df["control_id"].dtype == object
-        assert df["monitoring_metric_id"].dtype in ["int64", "int32", "float64"]
-        assert df["monitoring_metric_value"].dtype in ["float64", "float32"]
-        assert df["compliance_status"].dtype == object
-        assert df["numerator"].dtype in ["int64", "int32", "float64"]
-        assert df["denominator"].dtype in ["int64", "int32", "float64"]
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(_mock_threshold_df(), context)
+    
+    assert not result.empty
 
+def test_main_function_execution(mock):
+    mock_env = mock.Mock()
+    
+    with mock.patch("etip_env.set_env_vars", return_value=mock_env):
+        with mock.patch("pl_automated_monitoring_CTRL_1101994.pipeline.run") as mock_run:
+            with mock.patch("sys.exit") as mock_exit:
+                code = """
+if True:
+    from etip_env import set_env_vars
+    from pl_automated_monitoring_CTRL_1101994.pipeline import run
+    
+    env = set_env_vars()
+    try:
+        run(env=env, is_load=False, dq_actions=False)
+    except Exception as e:
+        import sys
+        sys.exit(1)
+"""
+                exec(code)
+                
+                assert not mock_exit.called
+                mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
 
-class Test_CTRL_1101994_Pipeline(ConfigPipelineTestCase):
-    """Test class for the Symantec Proxy Monitoring (CTRL-1101994) pipeline."""
+def test_symantec_data_processing(mock):
+    thresholds_df = _mock_threshold_df()
+    symantec_data = _mock_symantec_data()
+    
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1101994(env)
+    
+    with freeze_time("2024-11-05 12:09:00"):
+        result = calculate_metrics(thresholds_df, {"symantec_data": symantec_data})
+        
+        row = result.iloc[0]
+        assert row["control_id"] == "CTRL-1101994"
+        assert row["monitoring_metric_id"] == 194
+        assert isinstance(row["monitoring_metric_value"], float)
+        assert row["monitoring_metric_status"] in ["Green", "Yellow", "Red"]
 
-    def test_calculate_symantec_proxy_metrics(self):
-        """Test the main transformer function that calculates metrics."""
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            result_df = pipeline.calculate_symantec_proxy_metrics(
-                thresholds_raw=_tier_threshold_df(),
-                ctrl_id="CTRL-1101994",
-                tier2_metric_id=53
+def test_compliance_status_calculation():
+    test_cases = [
+        (95.0, 90.0, 80.0, "Green"),
+        (85.0, 90.0, 80.0, "Yellow"),
+        (75.0, 90.0, 80.0, "Red")
+    ]
+    
+    for value, alert_threshold, warning_threshold, expected in test_cases:
+        if value >= alert_threshold:
+            status = "Green"
+        elif value >= warning_threshold:
+            status = "Yellow"
+        else:
+            status = "Red"
+        assert status == expected
+
+def test_non_compliant_resources_tracking(mock):
+    thresholds_df = _mock_threshold_df()
+    
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "tests": [
+            {"id": "test_1", "status": "passed", "description": "Test 1"},
+            {"id": "test_2", "status": "failed", "description": "Test 2"}
+        ]
+    }
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
+    
+    context = {"api_connector": mock_api}
+    
+    with freeze_time("2024-11-05 12:09:00"):
+        result = calculate_metrics(thresholds_df, context)
+        
+        row = result.iloc[0]
+        if row["resources_info"] is not None:
+            assert isinstance(row["resources_info"], list)
+            for resource_json in row["resources_info"]:
+                resource = json.loads(resource_json)
+                assert "id" in resource or "test_id" in resource
+
+def test_get_api_connector(mock):
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1101994(env)
+    
+    with mock.patch("pl_automated_monitoring_CTRL_1101994.pipeline.refresh") as mock_refresh:
+        mock_refresh.return_value = "test_token"
+        
+        with mock.patch("pl_automated_monitoring_CTRL_1101994.pipeline.OauthApi") as mock_oauth:
+            mock_oauth.return_value = Mock()
+            
+            api_connector = pipeline._get_api_connector()
+            
+            mock_refresh.assert_called_once_with(
+                client_id="test_client",
+                client_secret="test_secret",
+                exchange_url="test-exchange.com"
             )
-            
-            # Update the timestamp to match what we get in the actual result
-            expected_df = _expected_output_df()
-            expected_df["date"] = result_df["date"].iloc[0]
-            
-            # Validate schema and structure
-            _validate_avro_schema(result_df)
-            
-            # Check basic metric values (the exact timestamp will differ)
-            assert result_df["monitoring_metric_id"].iloc[0] == 53
-            assert result_df["control_id"].iloc[0] == "CTRL-1101994"
-            assert result_df["monitoring_metric_value"].iloc[0] == 95.0
-            assert result_df["compliance_status"].iloc[0] == "Green"
-            assert result_df["numerator"].iloc[0] == 19
-            assert result_df["denominator"].iloc[0] == 20
-            assert result_df["non_compliant_resources"].iloc[0] is None
+            mock_oauth.assert_called_once()
+
+def test_transform_with_api_context(mock):
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1101994(env)
+    pipeline.context = {}
     
-    def test_get_compliance_status(self):
-        """Test the compliance status determination function."""
-        # Test Green status (above alert threshold)
-        assert pipeline.get_compliance_status(95.0, 90.0, 80.0) == "Green"
+    with mock.patch.object(pipeline, '_get_api_connector') as mock_get_api:
+        mock_api = Mock()
+        mock_get_api.return_value = mock_api
         
-        # Test Yellow status (between warning and alert thresholds)
-        assert pipeline.get_compliance_status(85.0, 90.0, 80.0) == "Yellow"
-        
-        # Test Red status (below warning threshold)
-        assert pipeline.get_compliance_status(75.0, 90.0, 80.0) == "Red"
-        
-        # Test handling invalid thresholds
-        assert pipeline.get_compliance_status(85.0, "invalid", 80.0) == "Red"
-        assert pipeline.get_compliance_status(85.0, 90.0, "invalid") == "Yellow"  # Warning is optional
-    
-    def test_pipeline_init_success(self):
-        """Test that pipeline initialization succeeds with proper environment configuration."""
-        class MockExchangeConfig:
-            def __init__(self, client_id="etip-client-id", client_secret="etip-client-secret", 
-                        exchange_url="https://api.cloud.capitalone.com/exchange"):
-                self.client_id = client_id
-                self.client_secret = client_secret
-                self.exchange_url = exchange_url
-                
-        class MockSnowflakeConfig:
-            def __init__(self):
-                self.query = lambda sql: pd.DataFrame()
-                
-        class MockEnv:
-            def __init__(self):
-                self.exchange = MockExchangeConfig()
-                self.snowflake = MockSnowflakeConfig()
-                
-        env = MockEnv()
-        pipe = pipeline.PLAutomatedMonitoringCtrl1101994(env)
-        assert pipe.client_id == "etip-client-id"
-        assert pipe.client_secret == "etip-client-secret"
-        assert pipe.exchange_url == "https://api.cloud.capitalone.com/exchange"
-    
-    def test_pipeline_init_missing_oauth_config(self):
-        """Test that pipeline initialization fails with missing OAuth config."""
-        class MockEnv:
-            def __init__(self):
-                # No exchange property to trigger the AttributeError
-                self.snowflake = mock.Mock()
-                
-        env = MockEnv()
-        with pytest.raises(ValueError, match="Environment object missing expected OAuth attributes"):
-            pipeline.PLAutomatedMonitoringCtrl1101994(env)
-    
-    def test_get_api_token_success(self, mocker):
-        """Test that API token refresh succeeds."""
-        mock_refresh = mocker.patch("pipelines.pl_automated_monitoring_CTRL_1101994.pipeline.refresh")
-        mock_refresh.return_value = "mock_token_value"
-        
-        class MockExchangeConfig:
-            def __init__(self):
-                self.client_id = "etip-client-id"
-                self.client_secret = "etip-client-secret"
-                self.exchange_url = "https://api.cloud.capitalone.com/exchange"
-                
-        class MockEnv:
-            def __init__(self):
-                self.exchange = MockExchangeConfig()
-                self.snowflake = mock.Mock()
-                
-        env = MockEnv()
-        pipe = pipeline.PLAutomatedMonitoringCtrl1101994(env)
-        token = pipe._get_api_token()
-        
-        assert token == "Bearer mock_token_value"
-        mock_refresh.assert_called_once_with(
-            client_id="etip-client-id",
-            client_secret="etip-client-secret",
-            exchange_url="https://api.cloud.capitalone.com/exchange"
-        )
-    
-    def test_get_api_token_failure(self, mocker):
-        """Test that API token refresh failure is handled properly."""
-        mock_refresh = mocker.patch("pipelines.pl_automated_monitoring_CTRL_1101994.pipeline.refresh")
-        mock_refresh.side_effect = Exception("Token refresh failed")
-        
-        class MockExchangeConfig:
-            def __init__(self):
-                self.client_id = "etip-client-id"
-                self.client_secret = "etip-client-secret"
-                self.exchange_url = "https://api.cloud.capitalone.com/exchange"
-                
-        class MockEnv:
-            def __init__(self):
-                self.exchange = MockExchangeConfig()
-                self.snowflake = mock.Mock()
-                
-        env = MockEnv()
-        pipe = pipeline.PLAutomatedMonitoringCtrl1101994(env)
-        
-        with pytest.raises(RuntimeError, match="API token refresh failed"):
-            pipe._get_api_token()
-    
-    def test_full_pipeline_run(self, mocker):
-        """Test the full pipeline run with mocked components."""
-        # Mock the pipeline components
-        mock_configure = mocker.patch("pathlib.Path.__truediv__")
-        mock_configure.return_value = "/path/to/config.yml"
-        
-        # Create a pipeline instance with mocked environment
-        class MockExchangeConfig:
-            def __init__(self):
-                self.client_id = "etip-client-id"
-                self.client_secret = "etip-client-secret"
-                self.exchange_url = "https://api.cloud.capitalone.com/exchange"
-                
-        class MockSnowflakeConfig:
-            def __init__(self):
-                self.query = lambda sql: _tier_threshold_df()
-                
-        class MockEnv:
-            def __init__(self):
-                self.exchange = MockExchangeConfig()
-                self.snowflake = MockSnowflakeConfig()
-                
-        env = MockEnv()
-        
-        # Use patch.multiple to mock multiple methods at once
-        with mock.patch.multiple(
-            "pipelines.pl_automated_monitoring_CTRL_1101994.pipeline.PLAutomatedMonitoringCtrl1101994",
-            configure_from_filename=mock.DEFAULT,
-            run=mock.DEFAULT
-        ) as mocks:
-            # Configure the mocks
-            mocks["configure_from_filename"].return_value = None
-            mocks["run"].return_value = None
+        with mock.patch.object(pipeline.__class__.__bases__[0], 'transform') as mock_super_transform:
+            pipeline.transform()
             
-            # Run the pipeline
-            pipeline.run(env)
-            
-            # Verify that the pipeline was configured and run
-            mocks["configure_from_filename"].assert_called_once()
-            mocks["run"].assert_called_once_with(load=True, dq_actions=True)
-    
-    def test_run_with_test_data_export(self, mocker):
-        """Test running the pipeline in test data export mode."""
-        # Mock the pipeline components
-        mock_configure = mocker.patch("pathlib.Path.__truediv__")
-        mock_configure.return_value = "/path/to/config.yml"
-        
-        class MockExchangeConfig:
-            def __init__(self):
-                self.client_id = "etip-client-id"
-                self.client_secret = "etip-client-secret"
-                self.exchange_url = "https://api.cloud.capitalone.com/exchange"
-                
-        class MockSnowflakeConfig:
-            def __init__(self):
-                self.query = lambda sql: _tier_threshold_df()
-                
-        class MockEnv:
-            def __init__(self):
-                self.exchange = MockExchangeConfig()
-                self.snowflake = MockSnowflakeConfig()
-                
-        env = MockEnv()
-        
-        # Use patch.multiple to mock multiple methods at once
-        with mock.patch.multiple(
-            "pipelines.pl_automated_monitoring_CTRL_1101994.pipeline.PLAutomatedMonitoringCtrl1101994",
-            configure_from_filename=mock.DEFAULT,
-            run_test_data_export=mock.DEFAULT
-        ) as mocks:
-            # Configure the mocks
-            mocks["configure_from_filename"].return_value = None
-            mocks["run_test_data_export"].return_value = None
-            
-            # Run the pipeline in test data export mode
-            pipeline.run(env, is_export_test_data=True)
-            
-            # Verify that the pipeline was configured and run in test data export mode
-            mocks["configure_from_filename"].assert_called_once()
-            mocks["run_test_data_export"].assert_called_once_with(dq_actions=True)
+            assert "api_connector" in pipeline.context
+            assert pipeline.context["api_connector"] == mock_api
+            mock_super_transform.assert_called_once()

@@ -800,4 +800,263 @@ All pipelines must output data with these exact field names and types:
 6. **Missing Error Handling**: Always wrap API calls in try-catch blocks
 7. **Timestamp Inconsistencies**: Use consistent datetime handling in tests and code
 
+## Code Quality and Linting Standards
+
+### Python Code Quality Requirements
+
+#### Import Management
+1. **No Unused Imports**: All imports must be used. Remove any unused imports immediately.
+   ```python
+   # ❌ BAD - Unused import
+   from connectors.ca_certs import C1_CERT_FILE  # If not used
+   
+   # ✅ GOOD - Only import what you use
+   from connectors.ca_certs import C1_CERT_FILE
+   ssl_context = ssl.create_default_context(cafile=C1_CERT_FILE)
+   ```
+
+2. **No Hallucinated Imports**: Never import modules or frameworks that don't exist in the codebase. Always verify imports against existing codebase structure.
+   ```python
+   # ❌ BAD - Non-existent import
+   from pipeline.framework import SomeModule  # Does not exist
+   from fake_library import NonExistentClass
+   
+   # ✅ GOOD - Use only verified existing imports
+   from config_pipeline import ConfigPipeline
+   from transform_library import transformer
+   from etip_env import Env
+   ```
+
+3. **No Unused Variables**: All variables must be used. Remove any unused variable assignments.
+   ```python
+   # ❌ BAD - Unused variable
+   thresholds = thresholds_raw.to_dict("records")  # If never used
+   
+   # ✅ GOOD - Use the variable or remove it
+   thresholds = thresholds_raw.to_dict("records")
+   for threshold in thresholds:
+       # Process threshold
+   ```
+
+3. **Import Organization**: Follow standard Python import ordering:
+   ```python
+   # Standard library imports
+   import json
+   import ssl
+   import sys
+   from datetime import datetime
+   from typing import Dict, Any
+   
+   # Third-party imports
+   import pandas as pd
+   
+   # Local application imports
+   from config_pipeline import ConfigPipeline
+   from connectors.api import OauthApi
+   from connectors.ca_certs import C1_CERT_FILE
+   from connectors.exchange.oauth_token import refresh
+   from etip_env import Env
+   from transform_library import transformer
+   ```
+
+#### Code Style Standards
+1. **Line Length**: Maximum 88 characters per line (Black standard)
+2. **Function Naming**: Use snake_case for all functions and variables
+3. **Class Naming**: Use PascalCase for class names
+4. **Constant Naming**: Use UPPER_SNAKE_CASE for constants
+
+#### Variable Usage Rules
+1. **Immediate Usage**: If you assign a variable, use it within the same function
+2. **Parameter Usage**: All function parameters must be used or explicitly marked as unused
+3. **Context Variables**: Always use extracted context variables
+
+### SQL Quality Standards
+
+#### SQLFluff Configuration Requirements
+All SQL files MUST include the required SQLFluff headers:
+
+```sql
+-- sqlfluff:dialect:snowflake
+-- sqlfluff:templater:placeholder:param_style:pyformat
+```
+
+**Example SQL File Structure:**
+```sql
+-- sqlfluff:dialect:snowflake
+-- sqlfluff:templater:placeholder:param_style:pyformat
+select
+    monitoring_metric_id,
+    control_id,
+    monitoring_metric_tier,
+    metric_name,
+    metric_description,
+    warning_threshold,
+    alerting_threshold,
+    control_executor,
+    metric_threshold_start_date,
+    metric_threshold_end_date
+from
+    etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
+where 
+    metric_threshold_end_date is null
+    and control_id = 'CTRL-1077125'
+```
+
+#### SQL Formatting Rules
+1. **Keywords**: Use lowercase for SQL keywords (`select`, `from`, `where`, `and`, `or`)
+2. **Indentation**: Use 4 spaces for indentation
+3. **Column Alignment**: Align column names in SELECT statements
+4. **Table Aliases**: Use meaningful aliases when joining tables
+5. **Comments**: Include SQLFluff directives at the top of every SQL file
+6. **Control ID Filtering**: For single-control pipelines, always include the specific control ID as a filter in SQL queries
+   ```sql
+   -- ✅ GOOD - Include control ID filter for single-control pipelines
+   select
+       monitoring_metric_id,
+       control_id,
+       monitoring_metric_tier
+   from
+       etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
+   where 
+       metric_threshold_end_date is null
+       and control_id = 'CTRL-1077231'  -- Always filter by specific control ID
+   
+   -- ❌ BAD - Missing control ID filter
+   select
+       monitoring_metric_id,
+       control_id,
+       monitoring_metric_tier
+   from
+       etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
+   where 
+       metric_threshold_end_date is null  -- Missing control_id filter
+   ```
+
+### Pre-commit Check Requirements
+
+#### Before Every Commit
+1. **Run Flake8**: Check for unused imports and variables
+   ```bash
+   flake8 src/pipelines/ tests/
+   ```
+
+2. **Run isort**: Organize imports properly
+   ```bash
+   isort src/pipelines/ tests/
+   ```
+
+3. **Run Black**: Format code consistently
+   ```bash
+   black src/pipelines/ tests/
+   ```
+
+4. **Run SQLFluff**: Validate SQL files
+   ```bash
+   sqlfluff fix src/pipelines/*/sql/*.sql
+   ```
+
+#### Common Linting Violations to Avoid
+
+**F401 - Unused Import**
+```python
+# ❌ BAD
+from etip_env import set_env_vars  # Not used anywhere
+
+# ✅ GOOD - Remove unused import or use it
+if __name__ == "__main__":
+    from etip_env import set_env_vars
+    env = set_env_vars()
+```
+
+**F841 - Unused Variable**
+```python
+# ❌ BAD
+def calculate_metrics(thresholds_raw, context):
+    thresholds = thresholds_raw.to_dict("records")  # Never used
+    return pd.DataFrame([])
+
+# ✅ GOOD
+def calculate_metrics(thresholds_raw, context):
+    thresholds = thresholds_raw.to_dict("records")
+    results = []
+    for threshold in thresholds:  # Now it's used
+        # Process threshold
+        pass
+    return pd.DataFrame(results)
+```
+
+### Automated Code Quality Checklist
+
+#### Required Python Standards
+- [ ] No unused imports (F401)
+- [ ] No unused variables (F841)
+- [ ] Proper import ordering (isort)
+- [ ] Consistent formatting (Black)
+- [ ] Line length ≤ 88 characters
+- [ ] Type hints for all function parameters
+- [ ] Docstrings for all public functions
+
+#### Required SQL Standards
+- [ ] SQLFluff headers present
+- [ ] Lowercase keywords
+- [ ] Proper indentation (4 spaces)
+- [ ] Column alignment
+- [ ] No trailing whitespace
+
+#### Required YAML Standards
+- [ ] Consistent indentation (2 spaces)
+- [ ] Proper quoting for strings
+- [ ] No duplicate keys
+- [ ] Valid YAML syntax
+
+### IDE Configuration Recommendations
+
+#### VS Code Settings
+```json
+{
+    "python.linting.enabled": true,
+    "python.linting.flake8Enabled": true,
+    "python.formatting.provider": "black",
+    "python.formatting.blackArgs": ["--line-length=88"],
+    "python.sortImports.args": ["--profile", "black"],
+    "sqlfluff.dialect": "snowflake",
+    "sqlfluff.templater": "placeholder"
+}
+```
+
+#### Pre-commit Hooks Configuration
+Ensure your `.pre-commit-config.yaml` includes:
+```yaml
+repos:
+  - repo: https://github.com/psf/black
+    rev: 23.1.0
+    hooks:
+      - id: black
+        language_version: python3
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        args: ["--profile", "black"]
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        args: ["--max-line-length=88", "--extend-ignore=E203,W503"]
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: 2.3.2
+    hooks:
+      - id: sqlfluff-fix
+        args: ["--dialect=snowflake", "--templater=placeholder"]
+```
+
+### Error Prevention Guidelines
+
+1. **Always run pre-commit checks before committing**
+2. **Use meaningful variable names that clearly indicate their purpose**
+3. **Remove debug code and temporary variables before committing**
+4. **Include SQLFluff headers in all new SQL files**
+5. **Test imports - if you import it, use it**
+6. **Follow the single responsibility principle for functions**
+
 This document serves as the definitive guide for ETIP pipeline development. All pipelines must adhere to these standards to ensure consistency, maintainability, and reliability across the platform.

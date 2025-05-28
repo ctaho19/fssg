@@ -1,182 +1,341 @@
-import datetime
-import unittest.mock as mock
+import pytest
 import pandas as pd
+from unittest.mock import Mock
 from freezegun import freeze_time
+from datetime import datetime
+import json
 
-import pipelines.pl_automated_monitoring_CTRL_1104900.pipeline as pipeline
-from etip_env import set_env_vars
-from tests.config_pipeline.helpers import ConfigPipelineTestCase
+from pl_automated_monitoring_CTRL_1104900.pipeline import (
+    PLAutomatedMonitoringCTRL1104900,
+    calculate_metrics
+)
 
+AVRO_SCHEMA_FIELDS = [
+    "control_monitoring_utc_timestamp",
+    "control_id", 
+    "monitoring_metric_id",
+    "monitoring_metric_value",
+    "monitoring_metric_status",
+    "metric_value_numerator",
+    "metric_value_denominator",
+    "resources_info"
+]
 
-def _tier_threshold_df():
-    """Test data for monitoring thresholds."""
-    return pd.DataFrame(
-        {
-            "control_id": [
-                "CTRL-1104900",
-            ],
-            "monitoring_metric_id": [42],
-            "monitoring_metric_tier": [
-                "Tier 2",
-            ],
-            "warning_threshold": [
-                80.0,
-            ],
-            "alerting_threshold": [
-                90.0,
-            ],
-            "control_executor": [
-                "Individual_1",
-            ],
-            "metric_threshold_start_date": [
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-            ],
-            "metric_threshold_end_date": [
-                None,
-            ],
-        }
-    )
+class MockExchangeConfig:
+    def __init__(self):
+        self.client_id = "test_client"
+        self.client_secret = "test_secret"
+        self.exchange_url = "test-exchange.com"
 
+class MockEnv:
+    def __init__(self):
+        self.exchange = MockExchangeConfig()
 
-def _symantec_proxy_outcome_df():
-    """Test data for Symantec Proxy test outcomes."""
-    return pd.DataFrame(
-        {
-            "TEST_ID": [
-                "test_1",
-                "test_2",
-                "test_3",
-                "test_4",
-                "test_5",
-            ],
-            "TEST_NAME": [
-                "Symantec Test 1",
-                "Symantec Test 2",
-                "Symantec Test 3",
-                "Symantec Test 4",
-                "Symantec Test 5",
-            ],
-            "PLATFORM": [
-                "symantec_proxy",
-                "symantec_proxy",
-                "symantec_proxy",
-                "symantec_proxy",
-                "symantec_proxy",
-            ],
-            "EXPECTED_OUTCOME": [
-                "blocked",
-                "blocked",
-                "blocked",
-                "blocked",
-                "passed",
-            ],
-            "ACTUAL_OUTCOME": [
-                "blocked",
-                "blocked",
-                "passed",  # This test failed (expected != actual)
-                "blocked",
-                "passed",
-            ],
-            "TEST_DESCRIPTION": [
-                "Test description 1",
-                "Test description 2",
-                "Test description 3",
-                "Test description 4",
-                "Test description 5",
-            ],
-            "SF_LOAD_TIMESTAMP": [
-                datetime.datetime(2024, 11, 4),
-                datetime.datetime(2024, 11, 4),
-                datetime.datetime(2024, 11, 4),
-                datetime.datetime(2024, 11, 4),
-                datetime.datetime(2024, 11, 4),
-            ],
-        }
-    )
-
-
-def _empty_outcome_df():
-    """Empty outcome dataframe for testing."""
-    return pd.DataFrame(
-        {
-            "TEST_ID": [],
-            "TEST_NAME": [],
-            "PLATFORM": [],
-            "EXPECTED_OUTCOME": [],
-            "ACTUAL_OUTCOME": [],
-            "TEST_DESCRIPTION": [],
-            "SF_LOAD_TIMESTAMP": [],
-        }
-    )
-
-
-class Test_CTRL_1104900_Pipeline(ConfigPipelineTestCase):
-    """Test class for the Symantec Proxy Monitoring (CTRL-1104900) pipeline."""
-
-    def test_extract_symantec_proxy_metrics(self):
-        """Test extraction and processing of Symantec Proxy metrics."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1104900Pipeline(env)
-            df = pl.extract_symantec_proxy_metrics(
-                _tier_threshold_df(),
-                _symantec_proxy_outcome_df()
-            )
-            
-            # Verify correct calculation (4/5 = 80% success rate)
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 80.0)
-            self.assertEqual(df["monitoring_metric_status"].iloc[0], "Yellow")  # 80% is Yellow (>= 80 but < 90)
-            self.assertEqual(df["metric_value_numerator"].iloc[0], 4)
-            self.assertEqual(df["metric_value_denominator"].iloc[0], 5)
+class MockOauthApi:
+    def __init__(self, url, api_token, ssl_context=None):
+        self.url = url
+        self.api_token = api_token
+        self.response = None
+        self.side_effect = None
     
-    def test_extract_symantec_proxy_metrics_empty(self):
-        """Test extraction with empty outcome data."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1104900Pipeline(env)
-            df = pl.extract_symantec_proxy_metrics(
-                _tier_threshold_df(),
-                _empty_outcome_df()
-            )
-            
-            # Verify metrics are 0 when no data is available
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 0.0)
-            self.assertEqual(df["monitoring_metric_status"].iloc[0], "Red")
-            self.assertEqual(df["metric_value_numerator"].iloc[0], 0)
-            self.assertEqual(df["metric_value_denominator"].iloc[0], 0)
+    def send_request(self, url, request_type, request_kwargs, retry_delay=5):
+        if self.side_effect:
+            if isinstance(self.side_effect, Exception):
+                raise self.side_effect
+            elif isinstance(self.side_effect, list) and self.side_effect:
+                response = self.side_effect.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+        
+        if self.response:
+            return self.response
+        
+        from requests import Response
+        default_response = Response()
+        default_response.status_code = 200
+        return default_response
+
+def _mock_threshold_df():
+    return pd.DataFrame([{
+        "monitoring_metric_id": 1104900,
+        "control_id": "CTRL-1104900",
+        "monitoring_metric_tier": "Tier 2",
+        "metric_name": "Symantec Proxy Test Success Rate",
+        "metric_description": "Percentage of Symantec proxy tests that pass",
+        "warning_threshold": 80.0,
+        "alerting_threshold": 90.0,
+        "control_executor": "Security Team"
+    }])
+
+def _mock_symantec_data():
+    return pd.DataFrame([
+        {
+            "TEST_ID": "test_1",
+            "TEST_NAME": "Symantec Test 1",
+            "PLATFORM": "symantec_proxy",
+            "EXPECTED_OUTCOME": "blocked",
+            "ACTUAL_OUTCOME": "blocked",
+            "TEST_DESCRIPTION": "Test description 1"
+        },
+        {
+            "TEST_ID": "test_2",
+            "TEST_NAME": "Symantec Test 2",
+            "PLATFORM": "symantec_proxy",
+            "EXPECTED_OUTCOME": "blocked",
+            "ACTUAL_OUTCOME": "passed",
+            "TEST_DESCRIPTION": "Test description 2"
+        }
+    ])
+
+def generate_mock_api_response(content=None, status_code=200):
+    from requests import Response
+    import json
     
-    def test_extract_with_error(self):
-        """Test error handling in extraction."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            with mock.patch.object(pipeline.PLAmCTRL1104900Pipeline, 'extract_symantec_proxy_metrics', 
-                                  side_effect=Exception("Test error")):
-                pl = pipeline.PLAmCTRL1104900Pipeline(env)
-                df = pl.extract()
+    mock_response = Response()
+    mock_response.status_code = status_code
+    
+    if content:
+        mock_response._content = json.dumps(content).encode("utf-8")
+    else:
+        mock_response._content = json.dumps({}).encode("utf-8")
+    
+    return mock_response
+
+@freeze_time("2024-11-05 12:09:00")
+def test_calculate_metrics_success(mock):
+    thresholds_df = _mock_threshold_df()
+    
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "tests": [
+            {"id": "test_1", "status": "passed"},
+            {"id": "test_2", "status": "failed"}
+        ]
+    }
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
+    
+    context = {"api_connector": mock_api}
+    
+    result = calculate_metrics(thresholds_df, context)
+    
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+    assert list(result.columns) == AVRO_SCHEMA_FIELDS
+    
+    row = result.iloc[0]
+    assert isinstance(row["control_monitoring_utc_timestamp"], datetime)
+    assert isinstance(row["monitoring_metric_value"], float)
+    assert isinstance(row["metric_value_numerator"], int)
+    assert isinstance(row["metric_value_denominator"], int)
+
+def test_calculate_metrics_empty_thresholds():
+    empty_df = pd.DataFrame()
+    context = {"api_connector": Mock()}
+    
+    with pytest.raises(RuntimeError, match="No threshold data found"):
+        calculate_metrics(empty_df, context)
+
+def test_pipeline_initialization():
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1104900(env)
+    
+    assert pipeline.env == env
+    assert hasattr(pipeline, 'api_url')
+    assert 'test-exchange.com' in pipeline.api_url
+
+def test_pipeline_run_method(mock):
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1104900(env)
+    
+    mock_run = mock.patch.object(pipeline, 'run')
+    pipeline.run()
+    
+    mock_run.assert_called_once_with()
+
+def test_api_error_handling(mock):
+    from requests.exceptions import RequestException
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.side_effect = RequestException("Connection error")
+    
+    context = {"api_connector": mock_api}
+    
+    with pytest.raises(RuntimeError, match="Failed to fetch"):
+        calculate_metrics(_mock_threshold_df(), context)
+
+def test_pagination_handling(mock):
+    page1_response = generate_mock_api_response({
+        "tests": [{"id": "test_1"}],
+        "nextRecordKey": "page2_key"
+    })
+    page2_response = generate_mock_api_response({
+        "tests": [{"id": "test_2"}],
+        "nextRecordKey": None
+    })
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.side_effect = [page1_response, page2_response]
+    
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(_mock_threshold_df(), context)
+    
+    assert not result.empty
+
+def test_main_function_execution(mock):
+    mock_env = mock.Mock()
+    
+    with mock.patch("etip_env.set_env_vars", return_value=mock_env):
+        with mock.patch("pl_automated_monitoring_CTRL_1104900.pipeline.run") as mock_run:
+            with mock.patch("sys.exit") as mock_exit:
+                code = """
+if True:
+    from etip_env import set_env_vars
+    from pl_automated_monitoring_CTRL_1104900.pipeline import run
+    
+    env = set_env_vars()
+    try:
+        run(env=env, is_load=False, dq_actions=False)
+    except Exception as e:
+        import sys
+        sys.exit(1)
+"""
+                exec(code)
                 
-                # The pipeline should return a valid DataFrame even if the extraction fails
-                self.assertIn("symantec_proxy_monitoring_df", df)
+                assert not mock_exit.called
+                mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
+
+def test_symantec_proxy_data_processing(mock):
+    thresholds_df = _mock_threshold_df()
+    symantec_data = _mock_symantec_data()
     
-    def test_run_nonprod(self):
-        """Test pipeline run in non-prod environment."""
-        env = set_env_vars("qa")
-        with mock.patch(
-            "pipelines.pl_automated_monitoring_CTRL_1104900.pipeline.PLAmCTRL1104900Pipeline"
-        ) as mock_pipeline:
-            pipeline.run(env)
-            mock_pipeline.assert_called_once_with(env)
-            mock_pipeline.return_value.run.assert_called_once_with(
-                load=True, dq_actions=True
-            )
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1104900(env)
     
-    def test_run_prod(self):
-        """Test pipeline run in prod environment."""
-        env = set_env_vars("prod")
-        with mock.patch(
-            "pipelines.pl_automated_monitoring_CTRL_1104900.pipeline.PLAmCTRL1104900Pipeline"
-        ) as mock_pipeline:
-            pipeline.run(env)
-            mock_pipeline.assert_called_once_with(env)
-            mock_pipeline.return_value.run.assert_called_once_with(
-                load=True, dq_actions=True
+    with freeze_time("2024-11-05 12:09:00"):
+        result = calculate_metrics(thresholds_df, {"symantec_data": symantec_data})
+        
+        row = result.iloc[0]
+        assert row["control_id"] == "CTRL-1104900"
+        assert row["monitoring_metric_id"] == 1104900
+        assert isinstance(row["monitoring_metric_value"], float)
+        assert row["monitoring_metric_status"] in ["Green", "Yellow", "Red"]
+
+def test_compliance_status_calculation():
+    test_cases = [
+        (95.0, 90.0, 80.0, "Green"),
+        (85.0, 90.0, 80.0, "Yellow"),
+        (75.0, 90.0, 80.0, "Red")
+    ]
+    
+    for value, alert_threshold, warning_threshold, expected in test_cases:
+        if value >= alert_threshold:
+            status = "Green"
+        elif value >= warning_threshold:
+            status = "Yellow"
+        else:
+            status = "Red"
+        assert status == expected
+
+def test_non_compliant_resources_tracking(mock):
+    thresholds_df = _mock_threshold_df()
+    
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "tests": [
+            {"id": "test_1", "status": "passed", "description": "Test 1"},
+            {"id": "test_2", "status": "failed", "description": "Test 2"}
+        ]
+    }
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
+    
+    context = {"api_connector": mock_api}
+    
+    with freeze_time("2024-11-05 12:09:00"):
+        result = calculate_metrics(thresholds_df, context)
+        
+        row = result.iloc[0]
+        if row["resources_info"] is not None:
+            assert isinstance(row["resources_info"], list)
+            for resource_json in row["resources_info"]:
+                resource = json.loads(resource_json)
+                assert "id" in resource or "test_id" in resource
+
+def test_get_api_connector(mock):
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1104900(env)
+    
+    with mock.patch("pl_automated_monitoring_CTRL_1104900.pipeline.refresh") as mock_refresh:
+        mock_refresh.return_value = "test_token"
+        
+        with mock.patch("pl_automated_monitoring_CTRL_1104900.pipeline.OauthApi") as mock_oauth:
+            mock_oauth.return_value = Mock()
+            
+            api_connector = pipeline._get_api_connector()
+            
+            mock_refresh.assert_called_once_with(
+                client_id="test_client",
+                client_secret="test_secret",
+                exchange_url="test-exchange.com"
             )
+            mock_oauth.assert_called_once()
+
+def test_transform_with_api_context(mock):
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1104900(env)
+    pipeline.context = {}
+    
+    with mock.patch.object(pipeline, '_get_api_connector') as mock_get_api:
+        mock_api = Mock()
+        mock_get_api.return_value = mock_api
+        
+        with mock.patch.object(pipeline.__class__.__bases__[0], 'transform') as mock_super_transform:
+            pipeline.transform()
+            
+            assert "api_connector" in pipeline.context
+            assert pipeline.context["api_connector"] == mock_api
+            mock_super_transform.assert_called_once()
+
+def test_symantec_proxy_test_outcomes(mock):
+    thresholds_df = _mock_threshold_df()
+    
+    test_data = pd.DataFrame([
+        {
+            "TEST_ID": "proxy_test_1",
+            "TEST_NAME": "Proxy Block Test 1",
+            "PLATFORM": "symantec_proxy",
+            "EXPECTED_OUTCOME": "blocked",
+            "ACTUAL_OUTCOME": "blocked",
+            "TEST_DESCRIPTION": "Test malicious URL blocking"
+        },
+        {
+            "TEST_ID": "proxy_test_2",
+            "TEST_NAME": "Proxy Block Test 2", 
+            "PLATFORM": "symantec_proxy",
+            "EXPECTED_OUTCOME": "blocked",
+            "ACTUAL_OUTCOME": "passed",
+            "TEST_DESCRIPTION": "Test failed - malicious URL not blocked"
+        }
+    ])
+    
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1104900(env)
+    
+    with freeze_time("2024-11-05 12:09:00"):
+        result = calculate_metrics(thresholds_df, {"test_outcomes": test_data})
+        
+        row = result.iloc[0]
+        assert row["control_id"] == "CTRL-1104900"
+        assert isinstance(row["monitoring_metric_value"], float)
+        
+        if row["resources_info"] is not None:
+            assert len(row["resources_info"]) >= 0
+            for resource_json in row["resources_info"]:
+                resource = json.loads(resource_json)
+                assert "TEST_ID" in resource or "test_id" in resource

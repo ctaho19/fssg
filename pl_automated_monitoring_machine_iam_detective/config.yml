@@ -1,5 +1,5 @@
 pipeline:
-  name: pl_automated_monitoring_CTRL_1079134
+  name: pl_automated_monitoring_machine_iam_detective
   use_test_data_on_nonprod: false
   dq_strict_mode: false
 
@@ -10,18 +10,18 @@ environments:
         connector: snowflake
         options:
           sql: "@text:sql/monitoring_thresholds.sql"
-      macie_metrics:
+      all_iam_roles:
         connector: snowflake
         options:
-          sql: "@text:sql/macie_metrics.sql"
-      macie_testing:
+          sql: "@text:sql/all_iam_roles.sql"
+      evaluated_roles:
         connector: snowflake
         options:
-          sql: "@text:sql/macie_testing.sql"
-      historical_stats:
+          sql: "@text:sql/evaluated_roles.sql"
+      sla_data:
         connector: snowflake
         options:
-          sql: "@text:sql/historical_stats.sql"
+          sql: "@text:sql/sla_data.sql"
     load:
       monitoring_metrics:
         - connector: onestream
@@ -37,18 +37,18 @@ environments:
         connector: snowflake
         options:
           sql: "@text:sql/monitoring_thresholds.sql"
-      macie_metrics:
+      all_iam_roles:
         connector: snowflake
         options:
-          sql: "@text:sql/macie_metrics.sql"
-      macie_testing:
+          sql: "@text:sql/all_iam_roles.sql"
+      evaluated_roles:
         connector: snowflake
         options:
-          sql: "@text:sql/macie_testing.sql"
-      historical_stats:
+          sql: "@text:sql/evaluated_roles.sql"
+      sla_data:
         connector: snowflake
         options:
-          sql: "@text:sql/historical_stats.sql"
+          sql: "@text:sql/sla_data.sql"
     load:
       monitoring_metrics:
         - connector: onestream
@@ -89,17 +89,23 @@ ingress_validation:
         check_type: "data_freshness"
         description: "Ingress data quality check"
 
-  macie_metrics:
+  all_iam_roles:
     - type: schema_check
       fatal: false
       informational: true
       envs: [local, prod]
       options:
         required_columns:
-          - METRIC_DATE
+          - RESOURCE_ID
+          - AMAZON_RESOURCE_NAME
+          - BA
+          - ACCOUNT
+          - CREATE_DATE
+          - TYPE
+          - FULL_RECORD
+          - ROLE_TYPE
           - SF_LOAD_TIMESTAMP
-          - TOTAL_BUCKETS_SCANNED_BY_MACIE
-          - TOTAL_CLOUDFRONTED_BUCKETS
+          - LOAD_TIMESTAMP
     - type: count_check
       fatal: true
       envs: [local, prod]
@@ -111,19 +117,18 @@ ingress_validation:
       informational: true
       envs: [local, prod]
       options:
-        description: "Macie metrics data quality check"
+        description: "IAM roles data quality check"
 
-  macie_testing:
+  evaluated_roles:
     - type: schema_check
       fatal: false
       informational: true
       envs: [local, prod]
       options:
         required_columns:
-          - REPORTDATE
-          - TESTISSUCCESSFUL
-          - TESTID
-          - TESTNAME
+          - RESOURCE_NAME
+          - COMPLIANCE_STATUS
+          - CONTROL_ID
     - type: count_check
       fatal: false
       informational: true
@@ -136,18 +141,18 @@ ingress_validation:
       informational: true
       envs: [local, prod]
       options:
-        description: "Macie testing data quality check"
+        description: "Evaluated roles data quality check"
 
-  historical_stats:
+  sla_data:
     - type: schema_check
       fatal: false
       informational: true
       envs: [local, prod]
       options:
         required_columns:
-          - AVG_HISTORICAL_TESTS
-          - MIN_HISTORICAL_TESTS
-          - MAX_HISTORICAL_TESTS
+          - RESOURCE_ID
+          - CONTROL_RISK
+          - OPEN_DATE_UTC_TIMESTAMP
     - type: count_check
       fatal: false
       informational: true
@@ -155,6 +160,12 @@ ingress_validation:
       options:
         data_location: Snowflake
         threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        description: "SLA data quality check"
 
 egress_validation:
   monitoring_metrics:
@@ -180,4 +191,4 @@ egress_validation:
       informational: true
       envs: [local, prod]
       options:
-        description: "Egress data will not match ingress data due to metric calculations"
+        description: "Egress data will not match ingress data due to API enrichment and metric calculations"

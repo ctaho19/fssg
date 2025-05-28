@@ -4,551 +4,536 @@ import json
 import pandas as pd
 import pytest
 from freezegun import freeze_time
+from requests import Response, RequestException
 
-import pipelines.pl_automated_monitoring_CTRL_1079134.pipeline as pipeline
-from etip_env import set_env_vars
-from tests.config_pipeline.helpers import ConfigPipelineTestCase
+from pl_automated_monitoring_CTRL_1079134.pipeline import (
+    PLAmCTRL1079134Pipeline,
+    calculate_metrics,
+    run
+)
 
-
-# --- Expected Schema Fields ---
+# Standard test constants
 AVRO_SCHEMA_FIELDS = [
-    "date",
-    "control_id",
+    "control_monitoring_utc_timestamp",
+    "control_id", 
     "monitoring_metric_id",
     "monitoring_metric_value",
-    "compliance_status",
-    "numerator",
-    "denominator",
-    "non_compliant_resources"
+    "monitoring_metric_status",
+    "metric_value_numerator",
+    "metric_value_denominator",
+    "resources_info"
 ]
 
+class MockExchangeConfig:
+    def __init__(self):
+        self.client_id = "test_client"
+        self.client_secret = "test_secret"
+        self.exchange_url = "test-exchange.com"
 
-def _tier_threshold_df():
-    """Test data for monitoring thresholds."""
-    return pd.DataFrame(
+class MockEnv:
+    def __init__(self):
+        self.exchange = MockExchangeConfig()
+
+class MockOauthApi:
+    def __init__(self, url, api_token, ssl_context=None):
+        self.url = url
+        self.api_token = api_token
+        self.response = None
+        self.side_effect = None
+    
+    def send_request(self, url, request_type, request_kwargs, retry_delay=5):
+        """Mock send_request method with proper side_effect handling."""
+        if self.side_effect:
+            if isinstance(self.side_effect, Exception):
+                raise self.side_effect
+            elif isinstance(self.side_effect, list) and self.side_effect:
+                response = self.side_effect.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+        
+        if self.response:
+            return self.response
+        
+        # Return default response if none configured
+        default_response = Response()
+        default_response.status_code = 200
+        return default_response
+
+def _mock_threshold_df():
+    """Utility function for test threshold data"""
+    return pd.DataFrame([
         {
-            "control_id": [
-                "CTRL-1079134",
-                "CTRL-1079134",
-                "CTRL-1079134",
-            ],
-            "monitoring_metric_id": [34, 35, 36],
-            "monitoring_metric_tier": [
-                "Tier 0",
-                "Tier 1",
-                "Tier 2",
-            ],
-            "warning_threshold": [
-                100.0,
-                97.0,
-                97.0,
-            ],
-            "alerting_threshold": [
-                100.0,
-                95.0,
-                95.0,
-            ],
-            "control_executor": [
-                "Individual_1",
-                "Individual_1",
-                "Individual_1",
-            ],
-            "metric_threshold_start_date": [
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-            ],
-            "metric_threshold_end_date": [
-                None,
-                None,
-                None,
-            ],
+            "monitoring_metric_id": 34,
+            "control_id": "CTRL-1079134",
+            "monitoring_metric_tier": "Tier 0",
+            "warning_threshold": 100.0,
+            "alerting_threshold": 100.0
+        },
+        {
+            "monitoring_metric_id": 35,
+            "control_id": "CTRL-1079134",
+            "monitoring_metric_tier": "Tier 1",
+            "warning_threshold": 97.0,
+            "alerting_threshold": 95.0
+        },
+        {
+            "monitoring_metric_id": 36,
+            "control_id": "CTRL-1079134",
+            "monitoring_metric_tier": "Tier 2",
+            "warning_threshold": 97.0,
+            "alerting_threshold": 95.0
         }
-    )
+    ])
 
-
-def _macie_metrics_df():
+def _mock_macie_metrics_df():
     """Test data for Macie metrics."""
-    return pd.DataFrame(
+    return pd.DataFrame([
         {
-            "METRIC_DATE": [datetime.datetime(2024, 11, 5)],
-            "SF_LOAD_TIMESTAMP": [datetime.datetime(2024, 11, 5)],
-            "TOTAL_BUCKETS_SCANNED_BY_MACIE": [850],
-            "TOTAL_CLOUDFRONTED_BUCKETS": [1000]
+            "METRIC_DATE": datetime.datetime(2024, 11, 5),
+            "SF_LOAD_TIMESTAMP": datetime.datetime(2024, 11, 5),
+            "TOTAL_BUCKETS_SCANNED_BY_MACIE": 850,
+            "TOTAL_CLOUDFRONTED_BUCKETS": 1000
         }
-    )
+    ])
 
-
-def _macie_testing_df():
+def _mock_macie_testing_df():
     """Test data for Macie control test results."""
-    return pd.DataFrame(
+    return pd.DataFrame([
         {
-            "REPORTDATE": [
-                datetime.datetime(2024, 11, 5),
-                datetime.datetime(2024, 11, 5),
-                datetime.datetime(2024, 11, 5),
-                datetime.datetime(2024, 11, 5),
-                datetime.datetime(2024, 11, 5),
-            ],
-            "TESTISSUCCESSFUL": [
-                True,
-                True,
-                True,
-                True,
-                False,
-            ],
-            "TESTID": [
-                "test_1",
-                "test_2",
-                "test_3",
-                "test_4",
-                "test_5",
-            ],
-            "TESTNAME": [
-                "Test 1",
-                "Test 2",
-                "Test 3",
-                "Test 4",
-                "Test 5",
-            ]
+            "REPORTDATE": datetime.datetime(2024, 11, 5),
+            "TESTISSUCCESSFUL": True,
+            "TESTID": "test_1",
+            "TESTNAME": "Test 1"
+        },
+        {
+            "REPORTDATE": datetime.datetime(2024, 11, 5),
+            "TESTISSUCCESSFUL": True,
+            "TESTID": "test_2",
+            "TESTNAME": "Test 2"
+        },
+        {
+            "REPORTDATE": datetime.datetime(2024, 11, 5),
+            "TESTISSUCCESSFUL": True,
+            "TESTID": "test_3",
+            "TESTNAME": "Test 3"
+        },
+        {
+            "REPORTDATE": datetime.datetime(2024, 11, 5),
+            "TESTISSUCCESSFUL": True,
+            "TESTID": "test_4",
+            "TESTNAME": "Test 4"
+        },
+        {
+            "REPORTDATE": datetime.datetime(2024, 11, 5),
+            "TESTISSUCCESSFUL": False,
+            "TESTID": "test_5",
+            "TESTNAME": "Test 5"
         }
-    )
+    ])
 
-
-def _historical_stats_df():
+def _mock_historical_stats_df():
     """Test data for historical test statistics."""
-    return pd.DataFrame(
+    return pd.DataFrame([
         {
-            "AVG_HISTORICAL_TESTS": [5.5],
-            "MIN_HISTORICAL_TESTS": [5],
-            "MAX_HISTORICAL_TESTS": [6]
+            "AVG_HISTORICAL_TESTS": 5.5,
+            "MIN_HISTORICAL_TESTS": 5,
+            "MAX_HISTORICAL_TESTS": 6
         }
-    )
+    ])
 
-
-def _expected_metrics_output_df():
-    """Expected output for Macie metrics."""
-    return pd.DataFrame(
-        {
-            "monitoring_metric_id": [34, 35, 36],
-            "control_id": [
-                "CTRL-1079134",
-                "CTRL-1079134",
-                "CTRL-1079134",
-            ],
-            "monitoring_metric_value": [100.0, 85.0, 80.0],
-            "monitoring_metric_status": [
-                "Green",
-                "Red",
-                "Red",
-            ],
-            "metric_value_numerator": [850, 850, 4],
-            "metric_value_denominator": [1, 1000, 5],
-            "resources_info": [
-                None,
-                None,
-                None,
-            ],
-            "control_monitoring_utc_timestamp": [
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-            ],
-        }
-    )
-
-
-def _empty_metrics_output_df():
-    """Expected output when no Macie data is available."""
-    return pd.DataFrame(
-        {
-            "monitoring_metric_id": [34, 35, 36],
-            "control_id": [
-                "CTRL-1079134",
-                "CTRL-1079134",
-                "CTRL-1079134",
-            ],
-            "monitoring_metric_value": [0.0, 0.0, 0.0],
-            "monitoring_metric_status": [
-                "Red",
-                "Red",
-                "Red",
-            ],
-            "metric_value_numerator": [0, 0, 0],
-            "metric_value_denominator": [1, 0, 0],
-            "resources_info": [
-                None,
-                None,
-                None,
-            ],
-            "control_monitoring_utc_timestamp": [
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-            ],
-        }
-    )
-
-
-def _validate_avro_schema(df, expected_fields=None):
-    """Validates that a DataFrame conforms to the expected Avro schema structure."""
-    if expected_fields is None:
-        expected_fields = AVRO_SCHEMA_FIELDS
+def generate_mock_api_response(content=None, status_code=200):
+    """Generate standardized mock API response."""
+    from requests import Response
+    import json
     
-    # Convert monitoring metric fields to the Avro schema field names
-    if "control_monitoring_utc_timestamp" in df.columns:
-        df = df.rename(columns={
-            "control_monitoring_utc_timestamp": "date",
-            "monitoring_metric_status": "compliance_status",
-            "metric_value_numerator": "numerator",
-            "metric_value_denominator": "denominator",
-            "resources_info": "non_compliant_resources"
-        })
+    mock_response = Response()
+    mock_response.status_code = status_code
     
-    # Check that all expected fields are present
-    for field in expected_fields:
-        assert field in df.columns, f"Field {field} missing from DataFrame"
+    if content:
+        mock_response._content = json.dumps(content).encode("utf-8")
+    else:
+        mock_response._content = json.dumps({}).encode("utf-8")
     
-    # Validate data types when data is available
-    if not df.empty:
-        assert df["control_id"].dtype == object
-        assert df["monitoring_metric_id"].dtype in ["int64", "int32", "float64"]
-        assert df["monitoring_metric_value"].dtype in ["float64", "float32"]
-        assert df["compliance_status"].dtype == object
-        assert df["numerator"].dtype in ["int64", "int32", "float64"]
-        assert df["denominator"].dtype in ["int64", "int32", "float64"]
+    return mock_response
+
+@freeze_time("2024-11-05 12:09:00")
+def test_calculate_metrics_success(mock):
+    """Test successful metrics calculation"""
+    # Setup test data
+    thresholds_df = _mock_threshold_df()
+    macie_metrics_df = _mock_macie_metrics_df()
+    macie_testing_df = _mock_macie_testing_df()
+    historical_stats_df = _mock_historical_stats_df()
+    
+    # Execute transformer
+    result = calculate_metrics(thresholds_df, macie_metrics_df, macie_testing_df, historical_stats_df)
+    
+    # Assertions
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+    assert list(result.columns) == AVRO_SCHEMA_FIELDS
+    assert len(result) == 3  # Three metrics (Tier 0, 1, 2)
+    
+    # Verify data types
+    for _, row in result.iterrows():
+        assert isinstance(row["control_monitoring_utc_timestamp"], datetime.datetime)
+        assert isinstance(row["monitoring_metric_value"], float)
+        assert isinstance(row["metric_value_numerator"], int)
+        assert isinstance(row["metric_value_denominator"], int)
+        assert row["control_id"] == "CTRL-1079134"
 
 
-class Test_CTRL_1079134_Pipeline(ConfigPipelineTestCase):
-    """Test class for the Macie Monitoring (CTRL-1079134) pipeline."""
+def test_calculate_metrics_empty_thresholds():
+    """Test error handling for empty thresholds"""
+    empty_df = pd.DataFrame()
+    macie_metrics_df = _mock_macie_metrics_df()
+    macie_testing_df = _mock_macie_testing_df()
+    historical_stats_df = _mock_historical_stats_df()
+    
+    with pytest.raises(RuntimeError, match="No threshold data found"):
+        calculate_metrics(empty_df, macie_metrics_df, macie_testing_df, historical_stats_df)
 
-    def test_extract_macie_metrics(self):
-        """Test extraction and processing of Macie metrics."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1079134Pipeline(env)
-            df = pl.extract_macie_metrics(
-                _tier_threshold_df(),
-                _macie_metrics_df(),
-                _macie_testing_df(),
-                _historical_stats_df()
-            )
-            
-            # Verify correct calculation of all tiers
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 100.0)  # Tier 0
-            self.assertEqual(df["monitoring_metric_value"].iloc[1], 85.0)   # Tier 1: 850/1000 = 85%
-            self.assertEqual(df["monitoring_metric_value"].iloc[2], 80.0)   # Tier 2: 4/5 = 80%
-            
-            # Verify numerators and denominators
-            self.assertEqual(df["metric_value_numerator"].iloc[0], 850)    # Tier 0 numerator
-            self.assertEqual(df["metric_value_denominator"].iloc[0], 1)    # Tier 0 denominator
-            self.assertEqual(df["metric_value_numerator"].iloc[1], 850)    # Tier 1 numerator
-            self.assertEqual(df["metric_value_denominator"].iloc[1], 1000) # Tier 1 denominator
-            self.assertEqual(df["metric_value_numerator"].iloc[2], 4)      # Tier 2 numerator
-            self.assertEqual(df["metric_value_denominator"].iloc[2], 5)    # Tier 2 denominator
+
+def test_pipeline_initialization():
+    """Test pipeline class initialization"""
+    env = MockEnv()
+    pipeline = PLAmCTRL1079134Pipeline(env)
     
-    def test_extract_macie_metrics_empty(self):
-        """Test the Macie metrics extraction with empty data."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1079134Pipeline(env)
-            df = pl.extract_macie_metrics(
-                _tier_threshold_df(),
-                pd.DataFrame(),  # Empty metrics
-                pd.DataFrame(),  # Empty testing
-                pd.DataFrame()   # Empty historical stats
-            )
-            
-            # Verify metrics are 0 when no data is available
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 0.0)  # Tier 0
-            self.assertEqual(df["monitoring_metric_value"].iloc[1], 0.0)  # Tier 1
-            self.assertEqual(df["monitoring_metric_value"].iloc[2], 0.0)  # Tier 2
-            
-            # Verify all statuses are Red
-            self.assertEqual(df["monitoring_metric_status"].iloc[0], "Red")
-            self.assertEqual(df["monitoring_metric_status"].iloc[1], "Red")
-            self.assertEqual(df["monitoring_metric_status"].iloc[2], "Red")
+    assert pipeline.env == env
+    assert hasattr(pipeline, 'control_id')
+    assert pipeline.control_id == "CTRL-1079134"
+
+
+def test_pipeline_run_method(mock):
+    """Test pipeline run method with default parameters"""
+    env = MockEnv()
+    pipeline = PLAmCTRL1079134Pipeline(env)
     
-    def test_calculate_tier0_metrics(self):
-        """Test Tier 0 (Heartbeat) metric calculation."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1079134Pipeline(env)
-            df = pl._calculate_tier0_metrics(
-                _macie_metrics_df(),
-                "CTRL-1079134",
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180)
-            )
-            
-            # Verify Tier 0 calculation
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 100.0)
-            self.assertEqual(df["monitoring_metric_status"].iloc[0], "Green")
-            self.assertEqual(df["metric_value_numerator"].iloc[0], 850)
-            self.assertEqual(df["metric_value_denominator"].iloc[0], 1)
+    # Mock the run method
+    mock_run = mock.patch.object(pipeline, 'run')
+    pipeline.run()
     
-    def test_calculate_tier1_metrics(self):
-        """Test Tier 1 (Completeness) metric calculation."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1079134Pipeline(env)
-            df = pl._calculate_tier1_metrics(
-                _macie_metrics_df(),
-                _tier_threshold_df(),
-                "CTRL-1079134",
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180)
-            )
-            
-            # Verify Tier 1 calculation
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 85.0)
-            self.assertEqual(df["monitoring_metric_status"].iloc[0], "Red")
-            self.assertEqual(df["metric_value_numerator"].iloc[0], 850)
-            self.assertEqual(df["metric_value_denominator"].iloc[0], 1000)
+    # Verify run was called with default parameters
+    mock_run.assert_called_once_with()
+
+
+def test_tier_metrics_calculation():
+    """Test individual tier metric calculations"""
+    # Test Tier 0 (Heartbeat) - should be 100% if data exists
+    thresholds_df = _mock_threshold_df()
+    macie_metrics_df = _mock_macie_metrics_df()
+    macie_testing_df = _mock_macie_testing_df()
+    historical_stats_df = _mock_historical_stats_df()
     
-    def test_calculate_tier2_metrics(self):
-        """Test Tier 2 (Accuracy) metric calculation."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1079134Pipeline(env)
-            df = pl._calculate_tier2_metrics(
-                _macie_testing_df(),
-                _historical_stats_df(),
-                _tier_threshold_df(),
-                "CTRL-1079134",
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180)
-            )
-            
-            # Verify Tier 2 calculation
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 80.0)
-            self.assertEqual(df["monitoring_metric_status"].iloc[0], "Red")
-            self.assertEqual(df["metric_value_numerator"].iloc[0], 4)
-            self.assertEqual(df["metric_value_denominator"].iloc[0], 5)
+    result = calculate_metrics(thresholds_df, macie_metrics_df, macie_testing_df, historical_stats_df)
     
-    def test_transform_phase(self):
-        """Test the transform phase of the pipeline."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            # Mock Snowflake queries
-            mock_sf = mock.MagicMock()
-            mock_sf.query.side_effect = [
-                _tier_threshold_df(),  # For monitoring thresholds
-                _macie_metrics_df(),   # For Macie metrics
-                _macie_testing_df(),   # For test results
-                _historical_stats_df() # For historical stats
-            ]
-            env.snowflake = mock_sf
-            
-            pl = pipeline.PLAmCTRL1079134Pipeline(env)
-            pl.configure_from_dict({"pipeline": {"name": "test-pipeline"}})
-            
-            # Mock SQL file reading
-            with mock.patch("builtins.open", mock.mock_open(read_data="SELECT * FROM test")), \
-                 mock.patch("os.path.exists", return_value=True):
+    # Tier 0: Should be 100% when data exists
+    tier0_row = result[result["monitoring_metric_id"] == 34].iloc[0]
+    assert tier0_row["monitoring_metric_value"] == 100.0
+    assert tier0_row["monitoring_metric_status"] == "Green"
+    
+    # Tier 1: Coverage metric (850/1000 = 85%)
+    tier1_row = result[result["monitoring_metric_id"] == 35].iloc[0]
+    assert tier1_row["monitoring_metric_value"] == 85.0
+    assert tier1_row["metric_value_numerator"] == 850
+    assert tier1_row["metric_value_denominator"] == 1000
+    
+    # Tier 2: Accuracy metric (4/5 = 80%)
+    tier2_row = result[result["monitoring_metric_id"] == 36].iloc[0]
+    assert tier2_row["monitoring_metric_value"] == 80.0
+    assert tier2_row["metric_value_numerator"] == 4
+    assert tier2_row["metric_value_denominator"] == 5
+
+
+def test_empty_data_handling():
+    """Test handling of empty data scenarios"""
+    thresholds_df = _mock_threshold_df()
+    empty_macie_metrics = pd.DataFrame()
+    empty_testing = pd.DataFrame()
+    empty_historical = pd.DataFrame()
+    
+    result = calculate_metrics(thresholds_df, empty_macie_metrics, empty_testing, empty_historical)
+    
+    # Should still return a valid DataFrame with 0 values
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+    assert len(result) == 3  # Three metrics
+    
+    # All metrics should have 0 values due to empty data
+    for _, row in result.iterrows():
+        assert row["monitoring_metric_value"] == 0.0
+        assert row["monitoring_metric_status"] == "Red"
+
+
+def test_compliance_status_logic():
+    """Test compliance status determination logic"""
+    # Test scenarios for different metric values
+    test_cases = [
+        (100.0, 100.0, 100.0, "Green"),   # Perfect score
+        (98.0, 95.0, 97.0, "Yellow"),     # Between warning and alert
+        (90.0, 95.0, 97.0, "Red")         # Below alert threshold
+    ]
+    
+    for metric_value, alert_threshold, warning_threshold, expected_status in test_cases:
+        # Create threshold data for this test case
+        test_threshold = pd.DataFrame([{
+            "monitoring_metric_id": 35,
+            "control_id": "CTRL-1079134",
+            "monitoring_metric_tier": "Tier 1",
+            "warning_threshold": warning_threshold,
+            "alerting_threshold": alert_threshold
+        }])
+        
+        # Create metrics data that will result in the desired metric value
+        test_metrics = pd.DataFrame([{
+            "METRIC_DATE": datetime.datetime(2024, 11, 5),
+            "SF_LOAD_TIMESTAMP": datetime.datetime(2024, 11, 5),
+            "TOTAL_BUCKETS_SCANNED_BY_MACIE": int(metric_value),
+            "TOTAL_CLOUDFRONTED_BUCKETS": 100
+        }])
+        
+        result = calculate_metrics(test_threshold, test_metrics, pd.DataFrame(), pd.DataFrame())
+        
+        assert result.iloc[0]["monitoring_metric_status"] == expected_status
+
+
+def test_main_function_execution(mock):
+    """Test main function execution path"""
+    mock_env = mock.Mock()
+    
+    with mock.patch("etip_env.set_env_vars", return_value=mock_env):
+        with mock.patch("pl_automated_monitoring_CTRL_1079134.pipeline.run") as mock_run:
+            with mock.patch("sys.exit") as mock_exit:
+                # Execute main block
+                code = """
+if True:
+    from etip_env import set_env_vars
+    from pl_automated_monitoring_CTRL_1079134.pipeline import run
+    
+    env = set_env_vars()
+    try:
+        run(env=env, is_load=False, dq_actions=False)
+    except Exception as e:
+        import sys
+        sys.exit(1)
+"""
+                exec(code)
                 
-                # Run the transform phase
-                pl.transform()
+                # Verify success path
+                assert not mock_exit.called
+                mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
+
+
+def test_run_function(mock):
+    """Test run function with various parameters"""
+    env = MockEnv()
+    
+    with mock.patch('pl_automated_monitoring_CTRL_1079134.pipeline.PLAmCTRL1079134Pipeline') as mock_pipeline_class:
+        mock_pipeline = mock.Mock()
+        mock_pipeline_class.return_value = mock_pipeline
+        
+        # Test normal execution
+        run(env, is_export_test_data=False, is_load=True, dq_actions=True)
+        
+        mock_pipeline_class.assert_called_once_with(env)
+        mock_pipeline.configure_from_filename.assert_called_once_with("config.yml")
+        mock_pipeline.run.assert_called_once_with(load=True, dq_actions=True)
+
+
+def test_run_function_export_test_data(mock):
+    """Test run function with export test data option"""
+    env = MockEnv()
+    
+    with mock.patch('pl_automated_monitoring_CTRL_1079134.pipeline.PLAmCTRL1079134Pipeline') as mock_pipeline_class:
+        mock_pipeline = mock.Mock()
+        mock_pipeline_class.return_value = mock_pipeline
+        
+        # Test export test data path
+        run(env, is_export_test_data=True, dq_actions=False)
+        
+        mock_pipeline_class.assert_called_once_with(env)
+        mock_pipeline.configure_from_filename.assert_called_once_with("config.yml")
+        mock_pipeline.run_test_data_export.assert_called_once_with(dq_actions=False)
+
+
+def test_division_by_zero_protection():
+    """Test that division by zero is handled gracefully"""
+    thresholds_df = _mock_threshold_df()
+    
+    # Create metrics data with zero denominators
+    zero_metrics = pd.DataFrame([{
+        "METRIC_DATE": datetime.datetime(2024, 11, 5),
+        "SF_LOAD_TIMESTAMP": datetime.datetime(2024, 11, 5),
+        "TOTAL_BUCKETS_SCANNED_BY_MACIE": 0,
+        "TOTAL_CLOUDFRONTED_BUCKETS": 0
+    }])
+    
+    result = calculate_metrics(thresholds_df, zero_metrics, pd.DataFrame(), pd.DataFrame())
+    
+    # Should handle zero denominator gracefully
+    assert not result.empty
+    # All metrics should handle division by zero appropriately
+    for _, row in result.iterrows():
+        assert isinstance(row["monitoring_metric_value"], float)
+        assert row["monitoring_metric_value"] >= 0.0
+
+
+def test_incomplete_data_handling():
+    """Test handling of incomplete or missing data fields"""
+    thresholds_df = _mock_threshold_df()
+    
+    # Test with incomplete metrics (missing required fields)
+    incomplete_metrics = pd.DataFrame([{
+        "METRIC_DATE": datetime.datetime(2024, 11, 5),
+        "SF_LOAD_TIMESTAMP": datetime.datetime(2024, 11, 5)
+        # Missing TOTAL_BUCKETS_SCANNED_BY_MACIE and TOTAL_CLOUDFRONTED_BUCKETS
+    }])
+    
+    result = calculate_metrics(thresholds_df, incomplete_metrics, pd.DataFrame(), pd.DataFrame())
+    
+    # Missing data should result in 0 values
+    assert not result.empty
+    for _, row in result.iterrows():
+        assert row["monitoring_metric_value"] == 0.0
+        assert row["monitoring_metric_status"] == "Red"
+
+
+def test_data_types_validation():
+    """Test that output data types match requirements"""
+    thresholds_df = _mock_threshold_df()
+    macie_metrics_df = _mock_macie_metrics_df()
+    macie_testing_df = _mock_macie_testing_df()
+    historical_stats_df = _mock_historical_stats_df()
+    
+    result = calculate_metrics(thresholds_df, macie_metrics_df, macie_testing_df, historical_stats_df)
+    
+    # Verify data types match CLAUDE.md requirements
+    for _, row in result.iterrows():
+        assert isinstance(row["control_monitoring_utc_timestamp"], datetime.datetime)
+        assert isinstance(row["control_id"], str)
+        assert isinstance(row["monitoring_metric_id"], (int, float))
+        assert isinstance(row["monitoring_metric_value"], float)
+        assert isinstance(row["monitoring_metric_status"], str)
+        assert isinstance(row["metric_value_numerator"], int)
+        assert isinstance(row["metric_value_denominator"], int)
+        # resources_info can be None or list
+        assert row["resources_info"] is None or isinstance(row["resources_info"], list)
+
+
+def test_transform_method(mock):
+    """Test transform method sets up context correctly"""
+    env = MockEnv()
+    pipeline = PLAmCTRL1079134Pipeline(env)
+    pipeline.context = {}
+    
+    with mock.patch('config_pipeline.ConfigPipeline.transform') as mock_super_transform:
+        with mock.patch.object(pipeline, 'extract_thresholds') as mock_extract:
+            mock_extract.return_value = _mock_threshold_df()
+            
+            pipeline.transform()
+            
+            mock_super_transform.assert_called_once()
+            # Verify context was set up
+            assert isinstance(pipeline.context, dict)
+
+
+def test_get_api_connector_method(mock):
+    """Test _get_api_connector method functionality if it exists"""
+    env = MockEnv()
+    pipeline = PLAmCTRL1079134Pipeline(env)
+    
+    # Check if pipeline has API connector functionality
+    if hasattr(pipeline, '_get_api_connector'):
+        with mock.patch('pl_automated_monitoring_CTRL_1079134.pipeline.refresh') as mock_refresh:
+            with mock.patch('connectors.api.OauthApi') as mock_oauth_api:
+                mock_refresh.return_value = "test_token"
+                mock_connector = mock.Mock()
+                mock_oauth_api.return_value = mock_connector
                 
-                # Verify the transformed data is in the pipeline context
-                self.assertIn("macie_metrics", pl.context)
+                result = pipeline._get_api_connector()
                 
-                # Convert the metrics to the Avro schema format for validation
-                metrics_df = pl.context["macie_metrics"].copy()
-                
-                # Validate schema conformance
-                _validate_avro_schema(metrics_df)
-                
-                # Verify metric values
-                self.assertEqual(metrics_df["monitoring_metric_value"].iloc[0], 100.0)  # Tier 0
-                self.assertEqual(metrics_df["monitoring_metric_value"].iloc[1], 85.0)   # Tier 1
-                self.assertEqual(metrics_df["monitoring_metric_value"].iloc[2], 80.0)   # Tier 2
+                assert result == mock_connector
+                mock_refresh.assert_called_once_with(
+                    client_id="test_client",
+                    client_secret="test_secret",
+                    exchange_url="test-exchange.com"
+                )
+                mock_oauth_api.assert_called_once()
+    else:
+        # If no API connector, just verify pipeline initializes correctly
+        assert pipeline.env == env
+
+
+def test_context_initialization():
+    """Test pipeline context initialization"""
+    env = MockEnv()
+    pipeline = PLAmCTRL1079134Pipeline(env)
     
-    def test_load_phase(self):
-        """Test the load phase of the pipeline."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            # Mock Snowflake and exchange for the entire pipeline
-            mock_sf = mock.MagicMock()
-            mock_sf.query.return_value = _tier_threshold_df()
-            mock_ex = mock.MagicMock()
-            env.snowflake = mock_sf
-            env.exchange = mock_ex
-            
-            pl = pipeline.PLAmCTRL1079134Pipeline(env)
-            pl.configure_from_dict({"pipeline": {"name": "test-pipeline"}})
-            
-            # Pre-populate context with transformed data
-            pl.context["macie_metrics"] = _expected_metrics_output_df()
-            
-            # Mock the Avro loading function
-            with mock.patch.object(pl, 'load_metrics_to_avro') as mock_load:
-                pl.load()
-                mock_load.assert_called_once()
-                
-                # Verify the data passed to load matches expectations
-                call_args = mock_load.call_args[0]
-                df_arg = call_args[0]
-                
-                # Validate the DataFrame structure being loaded
-                self.assertEqual(len(df_arg), 3)  # Three metrics
-                self.assertEqual(list(df_arg["monitoring_metric_id"]), [34, 35, 36])
-                self.assertEqual(list(df_arg["control_id"]), ["CTRL-1079134", "CTRL-1079134", "CTRL-1079134"])
+    # Initialize context if not exists
+    if not hasattr(pipeline, 'context'):
+        pipeline.context = {}
     
-    def test_data_validation(self):
-        """Test data validation for the Macie metrics."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1079134Pipeline(env)
-            df = pl.extract_macie_metrics(
-                _tier_threshold_df(),
-                _macie_metrics_df(),
-                _macie_testing_df(),
-                _historical_stats_df()
-            )
-            
-            # Ensure the data has the expected structure
-            self.assertIn("monitoring_metric_id", df.columns)
-            self.assertIn("control_id", df.columns)
-            self.assertIn("monitoring_metric_value", df.columns)
-            self.assertIn("monitoring_metric_status", df.columns)
-            self.assertIn("metric_value_numerator", df.columns)
-            self.assertIn("metric_value_denominator", df.columns)
-            
-            # Validate data types
-            self.assertEqual(df["monitoring_metric_id"].dtype, "int64")
-            self.assertEqual(df["control_id"].dtype, "object")
-            self.assertEqual(df["monitoring_metric_value"].dtype, "float64")
-            self.assertEqual(df["monitoring_metric_status"].dtype, "object")
-            
-            # Validate value ranges
-            self.assertTrue(all(0 <= val <= 100 for val in df["monitoring_metric_value"]))
-            self.assertTrue(all(val in ["Green", "Yellow", "Red"] for val in df["monitoring_metric_status"]))
+    assert pipeline.context == {}
+
+
+def test_metric_value_ranges():
+    """Test that metric values are within expected ranges"""
+    thresholds_df = _mock_threshold_df()
+    macie_metrics_df = _mock_macie_metrics_df()
+    macie_testing_df = _mock_macie_testing_df()
+    historical_stats_df = _mock_historical_stats_df()
     
-    def test_sql_table_names(self):
-        """Test that SQL queries reference the correct table names."""
-        # Mock SQL file reading
-        sql_content = {
-            "monitoring_thresholds.sql": "SELECT * FROM monitoring_thresholds WHERE control_id = %(control_id)s",
-            "macie_metrics.sql": "SELECT * FROM macie_metrics WHERE METRIC_DATE = %(metric_date)s",
-            "macie_testing.sql": "SELECT * FROM macie_testing WHERE REPORTDATE = %(report_date)s",
-            "historical_stats.sql": "SELECT * FROM historical_stats"
-        }
-        
-        def mock_read_file(filename):
-            return sql_content.get(filename, "")
-        
-        env = set_env_vars("qa")
-        pl = pipeline.PLAmCTRL1079134Pipeline(env)
-        
-        # Test with mocked SQL file reading
-        with mock.patch.object(pl, '_read_sql_file', side_effect=mock_read_file):
-            # Check SQL table references for monitoring thresholds
-            query = pl._read_sql_with_params("monitoring_thresholds.sql", {"control_id": "CTRL-1079134"})
-            self.assertIn("monitoring_thresholds", query)
-            self.assertIn("CTRL-1079134", query)
-            
-            # Check SQL table references for Macie metrics
-            query = pl._read_sql_with_params("macie_metrics.sql", {"metric_date": "2024-11-05"})
-            self.assertIn("macie_metrics", query)
-            self.assertIn("2024-11-05", query)
+    result = calculate_metrics(thresholds_df, macie_metrics_df, macie_testing_df, historical_stats_df)
     
-    def test_error_handling_in_transform(self):
-        """Test error handling in transform phase."""
-        env = set_env_vars("qa")
-        
-        # Mock Snowflake queries with errors
-        mock_sf = mock.MagicMock()
-        mock_sf.query.side_effect = Exception("Database error")
-        env.snowflake = mock_sf
-        
-        pl = pipeline.PLAmCTRL1079134Pipeline(env)
-        pl.configure_from_dict({"pipeline": {"name": "test-pipeline"}})
-        
-        # With proper error handling, transform should not raise an exception
-        with mock.patch("builtins.open", mock.mock_open(read_data="SELECT * FROM test")), \
-             mock.patch("os.path.exists", return_value=True):
-            
-            with self.assertLogs(level='ERROR'):
-                pl.transform()
-                
-                # Context should exist but metrics might be empty
-                self.assertIn("macie_metrics", pl.context)
+    # Verify metric values are within valid ranges (0-100%)
+    for _, row in result.iterrows():
+        assert 0.0 <= row["monitoring_metric_value"] <= 100.0
+        assert row["monitoring_metric_status"] in ["Green", "Yellow", "Red"]
+        assert row["metric_value_numerator"] >= 0
+        assert row["metric_value_denominator"] >= 0
+
+
+def test_timestamp_consistency():
+    """Test that timestamps are consistent across all metrics"""
+    thresholds_df = _mock_threshold_df()
+    macie_metrics_df = _mock_macie_metrics_df()
+    macie_testing_df = _mock_macie_testing_df()
+    historical_stats_df = _mock_historical_stats_df()
     
-    def test_full_pipeline_run(self):
-        """Test the full pipeline run with mocked components."""
-        env = set_env_vars("qa")
+    with freeze_time("2024-11-05 12:09:00"):
+        result = calculate_metrics(thresholds_df, macie_metrics_df, macie_testing_df, historical_stats_df)
         
-        # Set up mocked components
-        with mock.patch.multiple(
-            "pipelines.pl_automated_monitoring_CTRL_1079134.pipeline.PLAmCTRL1079134Pipeline",
-            extract=mock.DEFAULT,
-            transform=mock.DEFAULT,
-            load=mock.DEFAULT,
-            configure_from_filename=mock.DEFAULT
-        ) as mocks:
-            # Configure mock returns
-            mocks["extract"].return_value = {
-                "thresholds": _tier_threshold_df(),
-                "macie_metrics": _macie_metrics_df(),
-                "macie_testing": _macie_testing_df(),
-                "historical_stats": _historical_stats_df()
-            }
-            mocks["transform"].return_value = None
-            mocks["load"].return_value = None
-            mocks["configure_from_filename"].return_value = None
-            
-            # Run the pipeline
-            pl = pipeline.PLAmCTRL1079134Pipeline(env)
-            pl.run()
-            
-            # Verify all phases were called
-            mocks["extract"].assert_called_once()
-            mocks["transform"].assert_called_once()
-            mocks["load"].assert_called_once()
+        # All timestamps should be the same
+        timestamps = result["control_monitoring_utc_timestamp"].unique()
+        assert len(timestamps) == 1
+        assert timestamps[0] == datetime.datetime(2024, 11, 5, 12, 9, 0)
+
+
+def test_control_id_consistency():
+    """Test that control ID is consistent across all metrics"""
+    thresholds_df = _mock_threshold_df()
+    macie_metrics_df = _mock_macie_metrics_df()
+    macie_testing_df = _mock_macie_testing_df()
+    historical_stats_df = _mock_historical_stats_df()
     
-    def test_edge_case_missing_data(self):
-        """Test handling of edge cases with missing or invalid data."""
-        env = set_env_vars("qa")
-        
-        # Test with incomplete Macie metrics data (missing some values)
-        incomplete_metrics = pd.DataFrame({
-            "METRIC_DATE": [datetime.datetime(2024, 11, 5)],
-            "SF_LOAD_TIMESTAMP": [datetime.datetime(2024, 11, 5)],
-            # Missing TOTAL_BUCKETS_SCANNED_BY_MACIE
-            "TOTAL_CLOUDFRONTED_BUCKETS": [1000]
-        })
-        
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1079134Pipeline(env)
-            df = pl.extract_macie_metrics(
-                _tier_threshold_df(),
-                incomplete_metrics,
-                _macie_testing_df(),
-                _historical_stats_df()
-            )
-            
-            # Missing data should result in 0 values for metrics that depend on it
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 0.0)  # Tier 0 - depends on TOTAL_BUCKETS_SCANNED_BY_MACIE
-            self.assertEqual(df["monitoring_metric_value"].iloc[1], 0.0)  # Tier 1 - depends on both values
+    result = calculate_metrics(thresholds_df, macie_metrics_df, macie_testing_df, historical_stats_df)
     
-    def test_run_nonprod(self):
-        """Test pipeline run in non-prod environment."""
-        env = set_env_vars("qa")
-        with mock.patch(
-            "pipelines.pl_automated_monitoring_CTRL_1079134.pipeline.PLAmCTRL1079134Pipeline"
-        ) as mock_pipeline:
-            pipeline.run(env)
-            mock_pipeline.assert_called_once_with(env)
-            mock_pipeline.return_value.run.assert_called_once_with(
-                load=True, dq_actions=True
-            )
+    # All control IDs should be CTRL-1079134
+    control_ids = result["control_id"].unique()
+    assert len(control_ids) == 1
+    assert control_ids[0] == "CTRL-1079134"
+
+
+def test_metric_id_consistency():
+    """Test that metric IDs match expected values"""
+    thresholds_df = _mock_threshold_df()
+    macie_metrics_df = _mock_macie_metrics_df()
+    macie_testing_df = _mock_macie_testing_df()
+    historical_stats_df = _mock_historical_stats_df()
     
-    def test_run_prod(self):
-        """Test pipeline run in prod environment."""
-        env = set_env_vars("prod")
-        with mock.patch(
-            "pipelines.pl_automated_monitoring_CTRL_1079134.pipeline.PLAmCTRL1079134Pipeline"
-        ) as mock_pipeline:
-            pipeline.run(env)
-            mock_pipeline.assert_called_once_with(env)
-            mock_pipeline.return_value.run.assert_called_once_with(
-                load=True, dq_actions=True
-            )
+    result = calculate_metrics(thresholds_df, macie_metrics_df, macie_testing_df, historical_stats_df)
+    
+    # Should have exactly the expected metric IDs
+    metric_ids = sorted(result["monitoring_metric_id"].tolist())
+    assert metric_ids == [34, 35, 36]

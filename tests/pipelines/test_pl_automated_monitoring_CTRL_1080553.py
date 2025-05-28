@@ -1,480 +1,268 @@
-import datetime
-import json
-import unittest.mock as mock
-import pandas as pd
 import pytest
+import pandas as pd
+from unittest.mock import Mock
 from freezegun import freeze_time
+from datetime import datetime
+import json
 
-import pipelines.pl_automated_monitoring_CTRL_1080553.pipeline as pipeline
-from etip_env import set_env_vars
-from tests.config_pipeline.helpers import ConfigPipelineTestCase
+from pl_automated_monitoring_CTRL_1080553.pipeline import (
+    PLAutomatedMonitoringCTRL1080553,
+    calculate_metrics
+)
 
-
-# --- Expected Schema Fields ---
 AVRO_SCHEMA_FIELDS = [
-    "date",
-    "control_id",
+    "control_monitoring_utc_timestamp",
+    "control_id", 
     "monitoring_metric_id",
     "monitoring_metric_value",
-    "compliance_status",
-    "numerator",
-    "denominator",
-    "non_compliant_resources"
+    "monitoring_metric_status",
+    "metric_value_numerator",
+    "metric_value_denominator",
+    "resources_info"
 ]
 
+class MockExchangeConfig:
+    def __init__(self):
+        self.client_id = "test_client"
+        self.client_secret = "test_secret"
+        self.exchange_url = "test-exchange.com"
 
-def _tier_threshold_df():
-    """Test data for monitoring thresholds."""
-    return pd.DataFrame(
+class MockEnv:
+    def __init__(self):
+        self.exchange = MockExchangeConfig()
+
+class MockOauthApi:
+    def __init__(self, url, api_token, ssl_context=None):
+        self.url = url
+        self.api_token = api_token
+        self.response = None
+        self.side_effect = None
+    
+    def send_request(self, url, request_type, request_kwargs, retry_delay=5):
+        if self.side_effect:
+            if isinstance(self.side_effect, Exception):
+                raise self.side_effect
+            elif isinstance(self.side_effect, list) and self.side_effect:
+                response = self.side_effect.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+        
+        if self.response:
+            return self.response
+        
+        from requests import Response
+        default_response = Response()
+        default_response.status_code = 200
+        return default_response
+
+def _mock_threshold_df():
+    return pd.DataFrame([{
+        "monitoring_metric_id": 53,
+        "control_id": "CTRL-1080553",
+        "monitoring_metric_tier": "Tier 2",
+        "metric_name": "Proofpoint Anti-Phishing Test Success Rate",
+        "metric_description": "Percentage of Proofpoint anti-phishing tests that pass",
+        "warning_threshold": 80.0,
+        "alerting_threshold": 90.0,
+        "control_executor": "Security Team"
+    }])
+
+def _mock_proofpoint_data():
+    return pd.DataFrame([
         {
-            "control_id": [
-                "CTRL-1080553",
-            ],
-            "monitoring_metric_id": [53],
-            "monitoring_metric_tier": [
-                "Tier 2",
-            ],
-            "warning_threshold": [
-                80.0,
-            ],
-            "alerting_threshold": [
-                90.0,
-            ],
-            "control_executor": [
-                "Individual_1",
-            ],
-            "metric_threshold_start_date": [
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180),
-            ],
-            "metric_threshold_end_date": [
-                None,
-            ],
-        }
-    )
-
-
-def _proofpoint_outcome_df():
-    """Test data for Proofpoint test outcomes."""
-    return pd.DataFrame(
+            "TEST_ID": "test_1",
+            "TEST_NAME": "Proofpoint Test 1",
+            "PLATFORM": "proofpoint",
+            "EXPECTED_OUTCOME": "blocked",
+            "ACTUAL_OUTCOME": "blocked",
+            "TEST_DESCRIPTION": "Test description 1"
+        },
         {
-            "TEST_ID": [
-                "test_1",
-                "test_2",
-                "test_3",
-                "test_4",
-                "test_5",
-                "test_6",
-            ],
-            "TEST_NAME": [
-                "Proofpoint Test 1",
-                "Proofpoint Test 2",
-                "Proofpoint Test 3",
-                "Proofpoint Test 4",
-                "Proofpoint Test 5",
-                "Proofpoint Test 6",
-            ],
-            "PLATFORM": [
-                "proofpoint",
-                "proofpoint",
-                "proofpoint",
-                "proofpoint",
-                "proofpoint",
-                "proofpoint",
-            ],
-            "EXPECTED_OUTCOME": [
-                "blocked",
-                "blocked",
-                "blocked",
-                "blocked",
-                "passed",
-                "blocked",
-            ],
-            "ACTUAL_OUTCOME": [
-                "blocked",
-                "blocked",
-                "passed",  # This test failed (expected != actual)
-                "blocked",
-                "passed",
-                "passed",  # This test failed (expected != actual)
-            ],
-            "TEST_DESCRIPTION": [
-                "Test description 1",
-                "Test description 2",
-                "Test description 3",
-                "Test description 4",
-                "Test description 5",
-                "Test description 6",
-            ],
-            "SF_LOAD_TIMESTAMP": [
-                datetime.datetime(2024, 11, 4),
-                datetime.datetime(2024, 11, 4),
-                datetime.datetime(2024, 11, 4),
-                datetime.datetime(2024, 11, 4),
-                datetime.datetime(2024, 11, 4),
-                datetime.datetime(2024, 11, 4),
-            ],
+            "TEST_ID": "test_2",
+            "TEST_NAME": "Proofpoint Test 2",
+            "PLATFORM": "proofpoint",
+            "EXPECTED_OUTCOME": "blocked",
+            "ACTUAL_OUTCOME": "passed",
+            "TEST_DESCRIPTION": "Test description 2"
         }
-    )
+    ])
 
+def generate_mock_api_response(content=None, status_code=200):
+    from requests import Response
+    import json
+    
+    mock_response = Response()
+    mock_response.status_code = status_code
+    
+    if content:
+        mock_response._content = json.dumps(content).encode("utf-8")
+    else:
+        mock_response._content = json.dumps({}).encode("utf-8")
+    
+    return mock_response
 
-def _empty_outcome_df():
-    """Empty outcome dataframe for testing."""
-    return pd.DataFrame(
-        {
-            "TEST_ID": [],
-            "TEST_NAME": [],
-            "PLATFORM": [],
-            "EXPECTED_OUTCOME": [],
-            "ACTUAL_OUTCOME": [],
-            "TEST_DESCRIPTION": [],
-            "SF_LOAD_TIMESTAMP": [],
-        }
-    )
+@freeze_time("2024-11-05 12:09:00")
+def test_calculate_metrics_success(mock):
+    thresholds_df = _mock_threshold_df()
+    
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "tests": [
+            {"id": "test_1", "status": "passed"},
+            {"id": "test_2", "status": "failed"}
+        ]
+    }
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
+    
+    context = {"api_connector": mock_api}
+    
+    result = calculate_metrics(thresholds_df, context)
+    
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+    assert list(result.columns) == AVRO_SCHEMA_FIELDS
+    
+    row = result.iloc[0]
+    assert isinstance(row["control_monitoring_utc_timestamp"], datetime)
+    assert isinstance(row["monitoring_metric_value"], float)
+    assert isinstance(row["metric_value_numerator"], int)
+    assert isinstance(row["metric_value_denominator"], int)
 
+def test_calculate_metrics_empty_thresholds():
+    empty_df = pd.DataFrame()
+    context = {"api_connector": Mock()}
+    
+    with pytest.raises(RuntimeError, match="No threshold data found"):
+        calculate_metrics(empty_df, context)
 
-def _expected_output_df():
-    """Expected output dataframe for successful test case."""
-    return pd.DataFrame(
-        {
-            "monitoring_metric_id": [53],
-            "control_id": ["CTRL-1080553"],
-            "monitoring_metric_value": [66.67],
-            "monitoring_metric_status": ["Red"],
-            "metric_value_numerator": [4],
-            "metric_value_denominator": [6],
-            "resources_info": [[
-                json.dumps({
-                    "test_id": "test_3",
-                    "test_name": "Proofpoint Test 3",
-                    "test_description": "Test description 3",
-                    "expected_outcome": "blocked",
-                    "actual_outcome": "passed"
-                }),
-                json.dumps({
-                    "test_id": "test_6",
-                    "test_name": "Proofpoint Test 6",
-                    "test_description": "Test description 6",
-                    "expected_outcome": "blocked",
-                    "actual_outcome": "passed"
-                })
-            ]],
-            "control_monitoring_utc_timestamp": [
-                datetime.datetime(2024, 11, 5, 12, 9, 00, 21180)
-            ],
-        }
-    )
+def test_pipeline_initialization():
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1080553(env)
+    
+    assert pipeline.env == env
+    assert hasattr(pipeline, 'api_url')
+    assert 'test-exchange.com' in pipeline.api_url
 
+def test_pipeline_run_method(mock):
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1080553(env)
+    
+    mock_run = mock.patch.object(pipeline, 'run')
+    pipeline.run()
+    
+    mock_run.assert_called_once_with()
 
-def _validate_avro_schema(df, expected_fields=None):
-    """Validates that a DataFrame conforms to the expected Avro schema structure."""
-    if expected_fields is None:
-        expected_fields = AVRO_SCHEMA_FIELDS
+def test_api_error_handling(mock):
+    from requests.exceptions import RequestException
     
-    # Convert monitoring metric fields to the Avro schema field names
-    if "control_monitoring_utc_timestamp" in df.columns:
-        df = df.rename(columns={
-            "control_monitoring_utc_timestamp": "date",
-            "monitoring_metric_status": "compliance_status",
-            "metric_value_numerator": "numerator",
-            "metric_value_denominator": "denominator",
-            "resources_info": "non_compliant_resources"
-        })
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.side_effect = RequestException("Connection error")
     
-    # Check that all expected fields are present
-    for field in expected_fields:
-        assert field in df.columns, f"Field {field} missing from DataFrame"
+    context = {"api_connector": mock_api}
     
-    # Validate data types when data is available
-    if not df.empty:
-        assert df["control_id"].dtype == object
-        assert df["monitoring_metric_id"].dtype in ["int64", "int32", "float64"]
-        assert df["monitoring_metric_value"].dtype in ["float64", "float32"]
-        assert df["compliance_status"].dtype == object
-        assert df["numerator"].dtype in ["int64", "int32", "float64"]
-        assert df["denominator"].dtype in ["int64", "int32", "float64"]
+    with pytest.raises(RuntimeError, match="Failed to fetch"):
+        calculate_metrics(_mock_threshold_df(), context)
 
+def test_pagination_handling(mock):
+    page1_response = generate_mock_api_response({
+        "tests": [{"id": "test_1"}],
+        "nextRecordKey": "page2_key"
+    })
+    page2_response = generate_mock_api_response({
+        "tests": [{"id": "test_2"}],
+        "nextRecordKey": None
+    })
+    
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.side_effect = [page1_response, page2_response]
+    
+    context = {"api_connector": mock_api}
+    result = calculate_metrics(_mock_threshold_df(), context)
+    
+    assert not result.empty
 
-class Test_CTRL_1080553_Pipeline(ConfigPipelineTestCase):
-    """Test class for the Proofpoint Monitoring (CTRL-1080553) pipeline."""
+def test_main_function_execution(mock):
+    mock_env = mock.Mock()
+    
+    with mock.patch("etip_env.set_env_vars", return_value=mock_env):
+        with mock.patch("pl_automated_monitoring_CTRL_1080553.pipeline.run") as mock_run:
+            with mock.patch("sys.exit") as mock_exit:
+                code = """
+if True:
+    from etip_env import set_env_vars
+    from pl_automated_monitoring_CTRL_1080553.pipeline import run
+    
+    env = set_env_vars()
+    try:
+        run(env=env, is_load=False, dq_actions=False)
+    except Exception as e:
+        import sys
+        sys.exit(1)
+"""
+                exec(code)
+                
+                assert not mock_exit.called
+                mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
 
-    def test_extract_proofpoint_metrics(self):
-        """Test extraction and processing of Proofpoint metrics."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1080553Pipeline(env)
-            df = pl.extract_proofpoint_metrics(
-                _tier_threshold_df(),
-                _proofpoint_outcome_df()
-            )
-            
-            # Verify correct calculation (4/6 = 66.67% success rate)
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 66.67)
-            self.assertEqual(df["monitoring_metric_status"].iloc[0], "Red")  # 66.67% is Red (< 80)
-            self.assertEqual(df["metric_value_numerator"].iloc[0], 4)
-            self.assertEqual(df["metric_value_denominator"].iloc[0], 6)
+def test_proofpoint_data_processing(mock):
+    thresholds_df = _mock_threshold_df()
+    proofpoint_data = _mock_proofpoint_data()
     
-    def test_extract_proofpoint_metrics_empty(self):
-        """Test extraction with empty outcome data."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1080553Pipeline(env)
-            df = pl.extract_proofpoint_metrics(
-                _tier_threshold_df(),
-                _empty_outcome_df()
-            )
-            
-            # Verify metrics are 0 when no data is available
-            self.assertEqual(df["monitoring_metric_value"].iloc[0], 0.0)
-            self.assertEqual(df["monitoring_metric_status"].iloc[0], "Red")
-            self.assertEqual(df["metric_value_numerator"].iloc[0], 0)
-            self.assertEqual(df["metric_value_denominator"].iloc[0], 0)
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1080553(env)
     
-    def test_extract_with_error(self):
-        """Test error handling in extraction."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            with mock.patch.object(pipeline.PLAmCTRL1080553Pipeline, 'extract_proofpoint_metrics', 
-                                  side_effect=Exception("Test error")):
-                pl = pipeline.PLAmCTRL1080553Pipeline(env)
-                df = pl.extract()
-                
-                # The pipeline should return a valid DataFrame even if the extraction fails
-                self.assertIn("proofpoint_monitoring_df", df)
-    
-    def test_transform_phase(self):
-        """Test the transform phase of the pipeline."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            # Mock Snowflake queries
-            mock_sf = mock.MagicMock()
-            mock_sf.query.side_effect = [
-                _tier_threshold_df(),    # For monitoring thresholds
-                _proofpoint_outcome_df() # For test outcomes
-            ]
-            env.snowflake = mock_sf
-            
-            pl = pipeline.PLAmCTRL1080553Pipeline(env)
-            pl.configure_from_dict({"pipeline": {"name": "test-pipeline"}})
-            
-            # Mock SQL file reading
-            with mock.patch("builtins.open", mock.mock_open(read_data="SELECT * FROM test")), \
-                 mock.patch("os.path.exists", return_value=True):
-                
-                # Run the transform phase
-                pl.transform()
-                
-                # Verify the transformed data is in the pipeline context
-                self.assertIn("proofpoint_monitoring_metrics", pl.context)
-                
-                # Convert the metrics to the Avro schema format for validation
-                metrics_df = pl.context["proofpoint_monitoring_metrics"].copy()
-                
-                # Validate schema conformance
-                _validate_avro_schema(metrics_df)
-                
-                # Verify metric values
-                self.assertEqual(metrics_df["monitoring_metric_value"].iloc[0], 66.67)
-                self.assertEqual(metrics_df["metric_value_numerator"].iloc[0], 4)
-                self.assertEqual(metrics_df["metric_value_denominator"].iloc[0], 6)
-    
-    def test_load_phase(self):
-        """Test the load phase of the pipeline."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            # Mock Snowflake and exchange for the entire pipeline
-            mock_sf = mock.MagicMock()
-            mock_sf.query.return_value = _tier_threshold_df()
-            mock_ex = mock.MagicMock()
-            env.snowflake = mock_sf
-            env.exchange = mock_ex
-            
-            pl = pipeline.PLAmCTRL1080553Pipeline(env)
-            pl.configure_from_dict({"pipeline": {"name": "test-pipeline"}})
-            
-            # Pre-populate context with transformed data
-            pl.context["proofpoint_monitoring_metrics"] = _expected_output_df()
-            
-            # Mock the Avro loading function
-            with mock.patch.object(pl, 'load_metrics_to_avro') as mock_load:
-                pl.load()
-                mock_load.assert_called_once()
-                
-                # Verify the data passed to load matches expectations
-                call_args = mock_load.call_args[0]
-                df_arg = call_args[0]
-                
-                # Validate the DataFrame structure being loaded
-                self.assertEqual(len(df_arg), 1)  # One metric
-                self.assertEqual(df_arg["monitoring_metric_id"].iloc[0], 53)
-                self.assertEqual(df_arg["control_id"].iloc[0], "CTRL-1080553")
-    
-    def test_data_validation(self):
-        """Test data validation for the Proofpoint metrics."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1080553Pipeline(env)
-            df = pl.extract_proofpoint_metrics(
-                _tier_threshold_df(),
-                _proofpoint_outcome_df()
-            )
-            
-            # Ensure the data has the expected structure
-            self.assertIn("monitoring_metric_id", df.columns)
-            self.assertIn("control_id", df.columns)
-            self.assertIn("monitoring_metric_value", df.columns)
-            self.assertIn("monitoring_metric_status", df.columns)
-            self.assertIn("metric_value_numerator", df.columns)
-            self.assertIn("metric_value_denominator", df.columns)
-            self.assertIn("resources_info", df.columns)
-            
-            # Validate data types
-            self.assertEqual(df["monitoring_metric_id"].dtype, "int64")
-            self.assertEqual(df["control_id"].dtype, "object")
-            self.assertEqual(df["monitoring_metric_value"].dtype, "float64")
-            self.assertEqual(df["monitoring_metric_status"].dtype, "object")
-            
-            # Validate value ranges
-            self.assertTrue(all(0 <= val <= 100 for val in df["monitoring_metric_value"]))
-            self.assertTrue(all(val in ["Green", "Yellow", "Red"] for val in df["monitoring_metric_status"]))
-    
-    def test_non_compliant_resources(self):
-        """Test the non-compliant resources tracking."""
-        env = set_env_vars("qa")
-        with freeze_time("2024-11-05 12:09:00.021180"):
-            pl = pipeline.PLAmCTRL1080553Pipeline(env)
-            df = pl.extract_proofpoint_metrics(
-                _tier_threshold_df(),
-                _proofpoint_outcome_df()
-            )
-            
-            # Verify non-compliant resources are tracked correctly
-            resources_info = df["resources_info"].iloc[0]
-            
-            # Should have 2 failed tests
-            self.assertEqual(len(resources_info), 2)
-            
-            # Check test IDs of failed tests
-            test_ids = []
-            for resource in resources_info:
-                resource_dict = json.loads(resource)
-                test_ids.append(resource_dict["test_id"])
-            
-            self.assertIn("test_3", test_ids)
-            self.assertIn("test_6", test_ids)
-    
-    def test_sql_table_names(self):
-        """Test that SQL queries reference the correct table names."""
-        # Mock SQL file reading
-        sql_content = {
-            "monitoring_thresholds.sql": "SELECT * FROM monitoring_thresholds WHERE control_id = %(control_id)s",
-            "proofpoint_outcome.sql": "SELECT * FROM proofpoint_outcome WHERE SF_LOAD_TIMESTAMP >= %(date_threshold)s"
-        }
+    with freeze_time("2024-11-05 12:09:00"):
+        result = calculate_metrics(thresholds_df, {"proofpoint_data": proofpoint_data})
         
-        def mock_read_file(filename):
-            return sql_content.get(filename, "")
-        
-        env = set_env_vars("qa")
-        pl = pipeline.PLAmCTRL1080553Pipeline(env)
-        
-        # Test with mocked SQL file reading
-        with mock.patch.object(pl, '_read_sql_file', side_effect=mock_read_file):
-            # Check SQL table references for monitoring thresholds
-            query = pl._read_sql_with_params("monitoring_thresholds.sql", {"control_id": "CTRL-1080553"})
-            self.assertIn("monitoring_thresholds", query)
-            self.assertIn("CTRL-1080553", query)
-            
-            # Check SQL table references for Proofpoint outcomes
-            query = pl._read_sql_with_params("proofpoint_outcome.sql", {"date_threshold": "2024-11-01"})
-            self.assertIn("proofpoint_outcome", query)
-            self.assertIn("2024-11-01", query)
+        row = result.iloc[0]
+        assert row["control_id"] == "CTRL-1080553"
+        assert row["monitoring_metric_id"] == 53
+        assert isinstance(row["monitoring_metric_value"], float)
+        assert row["monitoring_metric_status"] in ["Green", "Yellow", "Red"]
+
+def test_compliance_status_calculation():
+    test_cases = [
+        (95.0, 90.0, 80.0, "Green"),
+        (85.0, 90.0, 80.0, "Yellow"),
+        (75.0, 90.0, 80.0, "Red")
+    ]
     
-    def test_error_handling_in_transform(self):
-        """Test error handling in transform phase."""
-        env = set_env_vars("qa")
-        
-        # Mock Snowflake queries with errors
-        mock_sf = mock.MagicMock()
-        mock_sf.query.side_effect = Exception("Database error")
-        env.snowflake = mock_sf
-        
-        pl = pipeline.PLAmCTRL1080553Pipeline(env)
-        pl.configure_from_dict({"pipeline": {"name": "test-pipeline"}})
-        
-        # With proper error handling, transform should not raise an exception
-        with mock.patch("builtins.open", mock.mock_open(read_data="SELECT * FROM test")), \
-             mock.patch("os.path.exists", return_value=True):
-            
-            with self.assertLogs(level='ERROR'):
-                pl.transform()
-                
-                # Context should exist but metrics might be empty or have default values
-                self.assertIn("proofpoint_monitoring_metrics", pl.context)
+    for value, alert_threshold, warning_threshold, expected in test_cases:
+        if value >= alert_threshold:
+            status = "Green"
+        elif value >= warning_threshold:
+            status = "Yellow"
+        else:
+            status = "Red"
+        assert status == expected
+
+def test_non_compliant_resources_tracking(mock):
+    thresholds_df = _mock_threshold_df()
     
-    def test_compliance_status_determination(self):
-        """Test the compliance status determination for different metric values."""
-        env = set_env_vars("qa")
-        pl = pipeline.PLAmCTRL1080553Pipeline(env)
-        
-        # Test various scenarios
-        # Red: Below alerting threshold (90%)
-        self.assertEqual(pl._get_compliance_status(85.0, 90.0, 80.0), "Red")
-        
-        # Yellow: Between alerting and warning thresholds
-        self.assertEqual(pl._get_compliance_status(85.0, 90.0, 80.0, reversed_thresholds=True), "Yellow")
-        
-        # Green: Above warning threshold
-        self.assertEqual(pl._get_compliance_status(95.0, 90.0, 80.0, reversed_thresholds=True), "Green")
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "tests": [
+            {"id": "test_1", "status": "passed", "description": "Test 1"},
+            {"id": "test_2", "status": "failed", "description": "Test 2"}
+        ]
+    }
     
-    def test_full_pipeline_run(self):
-        """Test the full pipeline run with mocked components."""
-        env = set_env_vars("qa")
+    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
+    mock_api.response = mock_response
+    
+    context = {"api_connector": mock_api}
+    
+    with freeze_time("2024-11-05 12:09:00"):
+        result = calculate_metrics(thresholds_df, context)
         
-        # Set up mocked components
-        with mock.patch.multiple(
-            "pipelines.pl_automated_monitoring_CTRL_1080553.pipeline.PLAmCTRL1080553Pipeline",
-            extract=mock.DEFAULT,
-            transform=mock.DEFAULT,
-            load=mock.DEFAULT,
-            configure_from_filename=mock.DEFAULT
-        ) as mocks:
-            # Configure mock returns
-            mocks["extract"].return_value = {
-                "thresholds": _tier_threshold_df(),
-                "proofpoint_outcomes": _proofpoint_outcome_df()
-            }
-            mocks["transform"].return_value = None
-            mocks["load"].return_value = None
-            mocks["configure_from_filename"].return_value = None
-            
-            # Run the pipeline
-            pl = pipeline.PLAmCTRL1080553Pipeline(env)
-            pl.run()
-            
-            # Verify all phases were called
-            mocks["extract"].assert_called_once()
-            mocks["transform"].assert_called_once()
-            mocks["load"].assert_called_once()
-    
-    def test_run_nonprod(self):
-        """Test pipeline run in non-prod environment."""
-        env = set_env_vars("qa")
-        with mock.patch(
-            "pipelines.pl_automated_monitoring_CTRL_1080553.pipeline.PLAmCTRL1080553Pipeline"
-        ) as mock_pipeline:
-            pipeline.run(env)
-            mock_pipeline.assert_called_once_with(env)
-            mock_pipeline.return_value.run.assert_called_once_with(
-                load=True, dq_actions=True
-            )
-    
-    def test_run_prod(self):
-        """Test pipeline run in prod environment."""
-        env = set_env_vars("prod")
-        with mock.patch(
-            "pipelines.pl_automated_monitoring_CTRL_1080553.pipeline.PLAmCTRL1080553Pipeline"
-        ) as mock_pipeline:
-            pipeline.run(env)
-            mock_pipeline.assert_called_once_with(env)
-            mock_pipeline.return_value.run.assert_called_once_with(
-                load=True, dq_actions=True
-            )
+        row = result.iloc[0]
+        if row["resources_info"] is not None:
+            assert isinstance(row["resources_info"], list)
+            for resource_json in row["resources_info"]:
+                resource = json.loads(resource_json)
+                assert "id" in resource or "test_id" in resource

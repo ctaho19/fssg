@@ -40,7 +40,7 @@ class MockOauthApi:
         self.response = None
         self.side_effect = None
     
-    def send_request(self, url, request_type, request_kwargs, retry_delay=5, max_retries=3):
+    def send_request(self, url, request_type, request_kwargs, retry_delay=5):
         """Mock send_request method with proper side_effect handling."""
         if self.side_effect:
             if isinstance(self.side_effect, Exception):
@@ -416,21 +416,58 @@ def test_context_initialization():
     
     assert pipeline.context == {}
 
+
+def test_get_api_connector_method(mock):
+    """Test _get_api_connector method functionality"""
+    with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.refresh') as mock_refresh:
+        with mock.patch('connectors.api.OauthApi') as mock_oauth_api:
+            mock_refresh.return_value = "test_token"
+            mock_connector = Mock()
+            mock_oauth_api.return_value = mock_connector
+            
+            env = MockEnv()
+            pipeline = PLAutomatedMonitoringCTRL1077224(env)
+            
+            result = pipeline._get_api_connector()
+            
+            assert result == mock_connector
+            mock_refresh.assert_called_once_with(
+                client_id="test_client",
+                client_secret="test_secret",
+                exchange_url="test-exchange.com"
+            )
+            mock_oauth_api.assert_called_once()
+
+
+def test_transform_method(mock):
+    """Test transform method sets up API context correctly"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1077224(env)
+    pipeline.context = {}
+    
+    with mock.patch.object(pipeline, '_get_api_connector') as mock_get_connector:
+        with mock.patch('config_pipeline.ConfigPipeline.transform') as mock_super_transform:
+            mock_connector = Mock()
+            mock_get_connector.return_value = mock_connector
+            
+            pipeline.transform()
+            
+            assert pipeline.context["api_connector"] == mock_connector
+            mock_get_connector.assert_called_once()
+            mock_super_transform.assert_called_once()
+
 def test_ssl_context_handling(mock):
     """Test SSL context handling when C1_CERT_FILE is set"""
-    import os
-    
-    # Mock environment variable
-    with mock.patch.dict(os.environ, {'C1_CERT_FILE': '/path/to/cert.pem'}):
-        env = MockEnv()
-        pipeline = PLAutomatedMonitoringCTRL1077224(env)
-        
-        # Test that _get_api_connector can be called without error
-        with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.refresh') as mock_refresh:
-            with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.ssl.create_default_context') as mock_ssl:
-                with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.OauthApi') as mock_oauth_api:
+    # Test that _get_api_connector can be called without error
+    with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.refresh') as mock_refresh:
+        with mock.patch('connectors.ca_certs.C1_CERT_FILE', '/path/to/cert.pem'):
+            with mock.patch('ssl.create_default_context') as mock_ssl:
+                with mock.patch('connectors.api.OauthApi') as mock_oauth_api:
                     mock_refresh.return_value = "test_token"
                     mock_ssl.return_value = "mock_ssl_context"
+                    
+                    env = MockEnv()
+                    pipeline = PLAutomatedMonitoringCTRL1077224(env)
                     
                     connector = pipeline._get_api_connector()
                     mock_ssl.assert_called_once_with(cafile='/path/to/cert.pem')
@@ -524,3 +561,39 @@ def test_tier_2_with_no_tier_1_compliant_resources(mock):
     # Tier 2: No resources to evaluate (denominator = 0)
     assert tier2_row["metric_value_numerator"] == 0
     assert tier2_row["metric_value_denominator"] == 0
+
+
+def test_run_function(mock):
+    """Test run function with various parameters"""
+    env = MockEnv()
+    
+    with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.PLAutomatedMonitoringCTRL1077224') as mock_pipeline_class:
+        mock_pipeline = Mock()
+        mock_pipeline_class.return_value = mock_pipeline
+        
+        from pl_automated_monitoring_CTRL_1077224.pipeline import run
+        
+        # Test normal execution
+        run(env, is_export_test_data=False, is_load=True, dq_actions=True)
+        
+        mock_pipeline_class.assert_called_once_with(env)
+        mock_pipeline.configure_from_filename.assert_called_once_with("config.yml")
+        mock_pipeline.run.assert_called_once_with(load=True, dq_actions=True)
+
+
+def test_run_function_export_test_data(mock):
+    """Test run function with export test data option"""
+    env = MockEnv()
+    
+    with mock.patch('pl_automated_monitoring_CTRL_1077224.pipeline.PLAutomatedMonitoringCTRL1077224') as mock_pipeline_class:
+        mock_pipeline = Mock()
+        mock_pipeline_class.return_value = mock_pipeline
+        
+        from pl_automated_monitoring_CTRL_1077224.pipeline import run
+        
+        # Test export test data path
+        run(env, is_export_test_data=True, dq_actions=False)
+        
+        mock_pipeline_class.assert_called_once_with(env)
+        mock_pipeline.configure_from_filename.assert_called_once_with("config.yml")
+        mock_pipeline.run_test_data_export.assert_called_once_with(dq_actions=False)

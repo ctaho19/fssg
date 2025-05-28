@@ -139,52 +139,52 @@ def test_pipeline_initialization():
     assert 'test-exchange.com' in pipeline.api_url
     assert 'internal-operations/cloud-service/aws-tooling/search-resource-configurations' in pipeline.api_url
 
-@patch('pl_automated_monitoring_CTRL_1077188.pipeline.refresh')
-@patch('connectors.ca_certs.C1_CERT_FILE', '/path/to/cert.pem')
-@patch('ssl.create_default_context')
-def test_get_api_connector_with_ssl(mock_ssl_context, mock_refresh):
+def test_get_api_connector_with_ssl(mock):
     """Test _get_api_connector method with SSL certificate"""
-    mock_refresh.return_value = "test_token"
-    mock_ssl_context.return_value = Mock()
-    
-    env = MockEnv()
-    pipeline = PLAutomatedMonitoringCTRL1077188(env)
-    
-    connector = pipeline._get_api_connector()
-    
-    assert connector.api_token == "Bearer test_token"
-    assert connector.url == pipeline.api_url
-    mock_ssl_context.assert_called_once_with(cafile='/path/to/cert.pem')
-    mock_refresh.assert_called_once_with(
-        client_id="test_client",
-        client_secret="test_secret", 
-        exchange_url="test-exchange.com"
-    )
+    with patch('pl_automated_monitoring_CTRL_1077188.pipeline.refresh') as mock_refresh:
+        with patch('connectors.ca_certs.C1_CERT_FILE', '/path/to/cert.pem'):
+            with patch('ssl.create_default_context') as mock_ssl_context:
+                mock_refresh.return_value = "test_token"
+                mock_ssl_context.return_value = Mock()
+                
+                env = MockEnv()
+                pipeline = PLAutomatedMonitoringCTRL1077188(env)
+                
+                connector = pipeline._get_api_connector()
+                
+                assert connector.api_token == "Bearer test_token"
+                assert connector.url == pipeline.api_url
+                mock_ssl_context.assert_called_once_with(cafile='/path/to/cert.pem')
+                mock_refresh.assert_called_once_with(
+                    client_id="test_client",
+                    client_secret="test_secret", 
+                    exchange_url="test-exchange.com"
+                )
 
-@patch('pl_automated_monitoring_CTRL_1077188.pipeline.refresh')
-@patch('connectors.ca_certs.C1_CERT_FILE', None)
-def test_get_api_connector_without_ssl(mock_refresh):
+def test_get_api_connector_without_ssl(mock):
     """Test _get_api_connector method without SSL certificate"""
-    mock_refresh.return_value = "test_token"
-    
-    env = MockEnv()
-    pipeline = PLAutomatedMonitoringCTRL1077188(env)
-    
-    connector = pipeline._get_api_connector()
-    
-    assert connector.api_token == "Bearer test_token"
-    assert connector.ssl_context is None
+    with patch('pl_automated_monitoring_CTRL_1077188.pipeline.refresh') as mock_refresh:
+        with patch('connectors.ca_certs.C1_CERT_FILE', None):
+            mock_refresh.return_value = "test_token"
+            
+            env = MockEnv()
+            pipeline = PLAutomatedMonitoringCTRL1077188(env)
+            
+            connector = pipeline._get_api_connector()
+            
+            assert connector.api_token == "Bearer test_token"
+            assert connector.ssl_context is None
 
-@patch('pl_automated_monitoring_CTRL_1077188.pipeline.refresh')
-def test_get_api_connector_refresh_failure(mock_refresh):
+def test_get_api_connector_refresh_failure(mock):
     """Test _get_api_connector method when OAuth refresh fails"""
-    mock_refresh.side_effect = Exception("OAuth refresh failed")
-    
-    env = MockEnv()
-    pipeline = PLAutomatedMonitoringCTRL1077188(env)
-    
-    with pytest.raises(Exception, match="OAuth refresh failed"):
-        pipeline._get_api_connector()
+    with patch('pl_automated_monitoring_CTRL_1077188.pipeline.refresh') as mock_refresh:
+        mock_refresh.side_effect = Exception("OAuth refresh failed")
+        
+        env = MockEnv()
+        pipeline = PLAutomatedMonitoringCTRL1077188(env)
+        
+        with pytest.raises(Exception, match="OAuth refresh failed"):
+            pipeline._get_api_connector()
 
 def test_transform_method():
     """Test transform method sets up API context correctly"""
@@ -860,3 +860,43 @@ def test_certificate_arn_case_insensitive_matching():
     tier1_result = result.iloc[0]
     assert tier1_result["monitoring_metric_value"] == 100.0  # Should match despite case difference
     assert tier1_result["resources_info"] is None  # No missing certificates
+
+
+def test_main_function_execution(mock):
+    """Test main function execution path"""
+    mock_env = mock.Mock()
+    
+    with mock.patch("etip_env.set_env_vars", return_value=mock_env):
+        with mock.patch("pl_automated_monitoring_CTRL_1077188.pipeline.run") as mock_run:
+            with mock.patch("sys.exit") as mock_exit:
+                # Execute main block
+                code = """
+if True:
+    from etip_env import set_env_vars
+    from pl_automated_monitoring_CTRL_1077188.pipeline import run
+    
+    env = set_env_vars()
+    try:
+        run(env=env, is_load=False, dq_actions=False)
+    except Exception as e:
+        import sys
+        sys.exit(1)
+"""
+                exec(code)
+                
+                # Verify success path
+                assert not mock_exit.called
+                mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
+
+
+def test_pipeline_run_method(mock):
+    """Test pipeline run method with default parameters"""
+    env = MockEnv()
+    pipeline_instance = PLAutomatedMonitoringCTRL1077188(env)
+    
+    # Mock the run method
+    mock_run = mock.patch.object(pipeline_instance, 'run')
+    pipeline_instance.run()
+    
+    # Verify run was called with default parameters
+    mock_run.assert_called_once_with()

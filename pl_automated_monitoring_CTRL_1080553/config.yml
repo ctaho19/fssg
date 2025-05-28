@@ -74,6 +74,19 @@ ingress_validation:
         description: "Ingress data quality check"
 
   proofpoint_outcome:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        required_columns:
+          - TEST_ID
+          - TEST_NAME
+          - PLATFORM
+          - EXPECTED_OUTCOME
+          - ACTUAL_OUTCOME
+          - TEST_DESCRIPTION
+          - SF_LOAD_TIMESTAMP
     - type: count_check
       fatal: false
       informational: true

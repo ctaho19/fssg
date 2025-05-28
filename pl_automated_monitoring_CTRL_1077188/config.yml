@@ -13,18 +13,7 @@ environments:
       dataset_certificates:
         connector: snowflake
         options:
-          sql: |
-            SELECT DISTINCT
-                certificate_arn,
-                certificate_id,
-                nominal_issuer,
-                not_valid_before_utc_timestamp,
-                not_valid_after_utc_timestamp,
-                last_usage_observation_utc_timestamp
-            FROM CYBR_DB.PHDP_CYBR.CERTIFICATE_CATALOG_CERTIFICATE_USAGE 
-            WHERE certificate_arn LIKE '%arn:aws:acm%' 
-              AND nominal_issuer = 'Amazon' 
-              AND not_valid_after_utc_timestamp >= DATEADD('DAY', -365, CURRENT_TIMESTAMP)
+          sql: "@text:sql/dataset_certificates.sql"
     load:
       monitoring_metrics:
         - connector: onestream
@@ -43,18 +32,7 @@ environments:
       dataset_certificates:
         connector: snowflake
         options:
-          sql: |
-            SELECT DISTINCT
-                certificate_arn,
-                certificate_id,
-                nominal_issuer,
-                not_valid_before_utc_timestamp,
-                not_valid_after_utc_timestamp,
-                last_usage_observation_utc_timestamp
-            FROM CYBR_DB.PHDP_CYBR.CERTIFICATE_CATALOG_CERTIFICATE_USAGE 
-            WHERE certificate_arn LIKE '%arn:aws:acm%' 
-              AND nominal_issuer = 'Amazon' 
-              AND not_valid_after_utc_timestamp >= DATEADD('DAY', -365, CURRENT_TIMESTAMP)
+          sql: "@text:sql/dataset_certificates.sql"
     load:
       monitoring_metrics:
         - connector: onestream
@@ -70,7 +48,7 @@ ingress_validation:
     - type: schema_check
       fatal: false
       informational: true
-      envs: [prod]
+      envs: [local, prod]
       options:
         required_columns:
           - monitoring_metric_id
@@ -83,14 +61,14 @@ ingress_validation:
           - control_executor
     - type: count_check
       fatal: true
-      envs: [prod]
+      envs: [local, prod]
       options:
         data_location: Snowflake
         threshold: 1
     - type: consistency_check
       fatal: false
       informational: true
-      envs: [prod]
+      envs: [local, prod]
       options:
         check_type: "data_freshness"
         description: "Ingress data quality check"
@@ -98,7 +76,7 @@ ingress_validation:
     - type: schema_check
       fatal: false
       informational: true
-      envs: [prod]
+      envs: [local, prod]
       options:
         required_columns:
           - certificate_arn
@@ -109,7 +87,7 @@ ingress_validation:
           - last_usage_observation_utc_timestamp
     - type: count_check
       fatal: true
-      envs: [prod]
+      envs: [local, prod]
       options:
         data_location: Snowflake
         threshold: 1
@@ -119,7 +97,7 @@ egress_validation:
     - type: schema_check
       fatal: false
       informational: true
-      envs: [prod]
+      envs: [local, prod]
       options:
         required_columns:
           - control_monitoring_utc_timestamp
@@ -132,17 +110,10 @@ egress_validation:
     - type: count_check
       fatal: false
       informational: true
-      envs: [prod]
+      envs: [local, prod]
     - type: consistency_check
       fatal: false
       informational: true
-      envs: [prod]
+      envs: [local, prod]
       options:
         description: "Egress data will not match ingress data due to API enrichment"
-
-transform:
-  monitoring_metrics:
-    - function: custom/calculate_metrics
-      options:
-        thresholds_raw: $thresholds_raw
-        dataset_certificates: $dataset_certificates
