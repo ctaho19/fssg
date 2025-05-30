@@ -365,7 +365,7 @@ return matching_count, (
 
 def load_thresholds(spark: SparkSession) -> pd.DataFrame:
     """Load compliance thresholds from Snowflake Table."""
-    query = "SELECT MONITORING_METRIC_ID, ALERT_THRESHOLD, WARNING_THRESHOLD FROM CYBR_DB_COLLAB.LAB_ESRA_TCRD.CYBER_CONTROLS_MONITORING_THRESHOLD WHERE MONITORING_METRIC_ID IN ('MNTR-1077125-T1', 'MNTR-1077125-T2')"
+    query = "SELECT MONITORING_METRIC_ID, ALERT_THRESHOLD, WARNING_THRESHOLD FROM CYBR_DB_COLLAB.LAB_ESRA_TCRD.CYBER_CONTROLS_MONITORING_THRESHOLD WHERE MONITORING_METRIC_ID IN ('MNTR-1077231-T1', 'MNTR-1077231-T2')"
     logger.info("Loading Tier 1 and Tier 2 thresholds from Snowflake")
     thresholds_df = (
         spark.read.format(SNOWFLAKE_SOURCE_NAME)
@@ -394,12 +394,12 @@ else:
     return pd.DataFrame(
         [
             {
-                "MONITORING_METRIC_ID": "MNTR-1077125-T1",
+                "MONITORING_METRIC_ID": "MNTR-1077231-T1",
                 "ALERT_THRESHOLD": 100,
                 "WARNING_THRESHOLD": "NULL",
             },
             {
-                "MONITORING_METRIC_ID": "MNTR-1077125-T2",
+                "MONITORING_METRIC_ID": "MNTR-1077231-T2",
                 "ALERT_THRESHOLD": 99,
                 "WARNING_THRESHOLD": "NULL",
             },
