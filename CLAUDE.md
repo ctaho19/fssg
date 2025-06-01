@@ -500,6 +500,7 @@ class MockExchangeConfig:
 class MockEnv:
     def __init__(self):
         self.exchange = MockExchangeConfig()
+        self.env = self  # Add self-reference for pipeline framework compatibility
 
 def _mock_threshold_df():
     """Utility function for test threshold data"""
@@ -762,7 +763,21 @@ All pipelines must output data with these exact field names and types:
 
 1. **Import Patterns**: ALWAYS use the `pipelines.` prefix for all pipeline imports to ensure proper module resolution
 2. **Mock Parameter Usage**: Do NOT add unused `mock` parameters to test functions unless you're actually using pytest-mock functionality
-3. **MockEnv Class Standards**: Use complete MockEnv implementation that matches working test patterns
+3. **MockEnv Class Standards**: Use complete MockEnv implementation that matches working test patterns:
+   ```python
+   # ❌ BAD - Missing env attribute causes AttributeError
+   class MockEnv:
+       def __init__(self):
+           self.exchange = MockExchangeConfig()
+   
+   # ✅ GOOD - Include self-reference for framework compatibility
+   class MockEnv:
+       def __init__(self):
+           self.exchange = MockExchangeConfig()
+           self.env = self  # Required by ConfigPipeline framework (expects env.env)
+   ```
+   The ConfigPipeline framework expects env objects to have an 'env' attribute containing the environment type. Without this, tests will fail with: `AttributeError: 'MockEnv' object has no attribute 'env'`
+
 4. **Test Class Methods Directly**: Test pipeline class methods (_calculate_metrics) instead of transformer functions
 5. **Extract Method Testing**: Include tests for the extract() method integration
 
