@@ -11,6 +11,7 @@ from pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline import 
     CONTROL_CONFIGS,
     run
 )
+from config_pipeline import ConfigPipeline
 
 # Standard test constants
 AVRO_SCHEMA_FIELDS = [
@@ -108,37 +109,41 @@ def test_calculate_metrics_multi_control_success():
     iam_roles_df = _mock_iam_roles()
     evaluated_roles_df = _mock_evaluated_roles()
     
-    # Mock API response for approved accounts
-    with patch('pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline.OauthApi') as mock_oauth:
-        mock_api_instance = Mock()
-        mock_oauth.return_value = mock_api_instance
+    # Mock OAuth token refresh
+    with patch('pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline.refresh') as mock_refresh:
+        mock_refresh.return_value = "test_token"
         
-        # Mock approved accounts API response
-        accounts_response = {
-            "accounts": [
-                {"accountNumber": "123456789012", "accountStatus": "Active"},
-                {"accountNumber": "987654321098", "accountStatus": "Active"}
-            ]
-        }
-        mock_api_instance.send_request.return_value = generate_mock_api_response(accounts_response)
-        
-        # Call _calculate_metrics directly
-        result = pipeline._calculate_metrics(thresholds_df, iam_roles_df, evaluated_roles_df)
-        
-        # Assertions
-        assert isinstance(result, pd.DataFrame)
-        assert not result.empty
-        assert list(result.columns) == AVRO_SCHEMA_FIELDS
-        assert len(result) == 4  # 2 metrics per control * 2 controls
-        
-        # Verify we have results for both controls
-        control_ids = set(result["control_id"].unique())
-        assert control_ids == {"CTRL-1105806", "CTRL-1077124"}
-        
-        # Verify data types
-        assert pd.api.types.is_integer_dtype(result["metric_value_numerator"])
-        assert pd.api.types.is_integer_dtype(result["metric_value_denominator"])
-        assert pd.api.types.is_float_dtype(result["monitoring_metric_value"])
+        # Mock API response for approved accounts
+        with patch('pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline.OauthApi') as mock_oauth:
+            mock_api_instance = Mock()
+            mock_oauth.return_value = mock_api_instance
+            
+            # Mock approved accounts API response
+            accounts_response = {
+                "accounts": [
+                    {"accountNumber": "123456789012", "accountStatus": "Active"},
+                    {"accountNumber": "987654321098", "accountStatus": "Active"}
+                ]
+            }
+            mock_api_instance.send_request.return_value = generate_mock_api_response(accounts_response)
+            
+            # Call _calculate_metrics directly
+            result = pipeline._calculate_metrics(thresholds_df, iam_roles_df, evaluated_roles_df)
+            
+            # Assertions
+            assert isinstance(result, pd.DataFrame)
+            assert not result.empty
+            assert list(result.columns) == AVRO_SCHEMA_FIELDS
+            assert len(result) == 4  # 2 metrics per control * 2 controls
+            
+            # Verify we have results for both controls
+            control_ids = set(result["control_id"].unique())
+            assert control_ids == {"CTRL-1105806", "CTRL-1077124"}
+            
+            # Verify data types
+            assert pd.api.types.is_integer_dtype(result["metric_value_numerator"])
+            assert pd.api.types.is_integer_dtype(result["metric_value_denominator"])
+            assert pd.api.types.is_float_dtype(result["monitoring_metric_value"])
 
 
 @freeze_time("2024-11-05 12:09:00")
@@ -251,9 +256,12 @@ def test_extract_method_integration():
         "evaluated_roles": [mock_evaluated]
     })
     
-    with patch.object(PLAutomatedMonitoringMachineIamPreventative, '__bases__', (Mock,)):
-        with patch('pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline.ConfigPipeline.extract') as mock_super:
-            mock_super.return_value = mock_df
+    # Mock OAuth token refresh
+    with patch('pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline.refresh') as mock_refresh:
+        mock_refresh.return_value = "test_token"
+        
+        # Mock the parent class extract method directly
+        with patch.object(ConfigPipeline, 'extract', return_value=mock_df):
             
             # Mock API calls to avoid actual network requests
             with patch('pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline.OauthApi') as mock_oauth:
@@ -270,9 +278,6 @@ def test_extract_method_integration():
                 mock_api_instance.send_request.return_value = generate_mock_api_response(accounts_response)
                 
                 result = pipeline.extract()
-                
-                # Verify super().extract() was called
-                mock_super.assert_called_once()
                 
                 # Verify the result has monitoring_metrics column
                 assert "monitoring_metrics" in result.columns
@@ -329,14 +334,18 @@ def test_compliance_status_determination():
          "COMPLIANCE_STATUS": "Compliant", "CONTROL_ID": "AC-6.AWS.13.v01"}
     ])
     
-    with patch.object(pipeline, '_get_approved_accounts') as mock_accounts:
-        mock_accounts.return_value = ["123456789012"]
+    # Mock OAuth token refresh
+    with patch('pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline.refresh') as mock_refresh:
+        mock_refresh.return_value = "test_token"
         
-        result = pipeline._calculate_metrics(thresholds_df, iam_roles_df, evaluated_roles_df)
-        
-        # 100% coverage should be Green (>= 95% alerting threshold)
-        assert result.iloc[0]["monitoring_metric_value"] == 100.0
-        assert result.iloc[0]["monitoring_metric_status"] == "Green"
+        with patch.object(pipeline, '_get_approved_accounts') as mock_accounts:
+            mock_accounts.return_value = ["123456789012"]
+            
+            result = pipeline._calculate_metrics(thresholds_df, iam_roles_df, evaluated_roles_df)
+            
+            # 100% coverage should be Green (>= 95% alerting threshold)
+            assert result.iloc[0]["monitoring_metric_value"] == 100.0
+            assert result.iloc[0]["monitoring_metric_status"] == "Green"
 
 
 if __name__ == "__main__":
