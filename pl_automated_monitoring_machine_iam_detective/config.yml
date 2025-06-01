@@ -58,6 +58,23 @@ environments:
             avro_schema: "@json:avro_schema.json"
             business_application: BAENTERPRISETECHINSIGHTS
 
+stages:
+  - name: ingress_validation
+    description: "Validate data quality of input datasets"
+    envs: [local, prod]
+  - name: extract
+    description: "Extract data from Snowflake and external APIs"
+    envs: [local, prod]
+  - name: transform
+    description: "Calculate Machine IAM detective control metrics with Tier 3 SLA"
+    envs: [local, prod]
+  - name: egress_validation
+    description: "Validate transformed metrics before loading"
+    envs: [local, prod]
+  - name: load
+    description: "Load metrics to OneStream"
+    envs: [local, prod]
+
 # REQUIRED: Comprehensive Data Quality Validation
 ingress_validation:
   thresholds_raw:

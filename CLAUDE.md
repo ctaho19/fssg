@@ -1,12 +1,181 @@
 # CLAUDE.md - ETIP Pipeline Development Standards
 
-This document provides comprehensive guidance for developing Enterprise Tech Insights Platform (ETIP) pipelines following Zach's established architectural patterns and coding standards.
+This document provides comprehensive guidance for developing Enterprise Tech Insights Platform (ETIP) pipelines following Zach's established production-ready architectural patterns and coding standards.
 
 ## Repository Overview
 
 This repository contains ETIP pipelines for automated security control monitoring. Each pipeline collects metrics from various data sources (APIs, databases), determines compliance status, and outputs standardized metrics data to support enterprise security monitoring and reporting.
 
-**Reference Implementation**: Always use `pl_automated_monitoring_cloud_custodian` pipeline and `test_pl_automated_monitoring_cloud_custodian.py` as the gold standard for pipeline architecture and testing patterns.
+**Reference Implementation**: Always use `pl_automated_monitoring_cloud_custodian` pipeline and `pl_automated_monitoring_cloudradar_controls` pipeline as the gold standard for production-ready pipeline architecture and testing patterns.
+
+## Production-Ready Pipeline Architecture
+
+All new ETIP pipelines must follow the **Extract Override Pattern** which represents Zach's production-ready architecture for API-integrated pipelines.
+
+### Production Architecture Pattern
+
+```python
+from typing import Dict, List
+import pandas as pd
+from datetime import datetime
+import json
+import ssl
+from config_pipeline import ConfigPipeline
+from connectors.api import OauthApi
+from connectors.ca_certs import C1_CERT_FILE
+from connectors.exchange.oauth_token import refresh
+from etip_env import Env
+
+class PLAutomatedMonitoring[ControlName](ConfigPipeline):
+    def __init__(self, env: Env) -> None:
+        super().__init__(env)
+        self.env = env
+        # Initialize control-specific variables
+        self.api_url = f"https://{self.env.exchange.exchange_url}/[api-endpoint-path]"
+        
+    def _get_api_connector(self) -> OauthApi:
+        """Standard OAuth API connector setup following Zach's pattern"""
+        api_token = refresh(
+            client_id=self.env.exchange.client_id,
+            client_secret=self.env.exchange.client_secret,
+            exchange_url=self.env.exchange.exchange_url,
+        )
+        
+        # Create SSL context if certificate file exists
+        ssl_context = None
+        if C1_CERT_FILE:
+            ssl_context = ssl.create_default_context(cafile=C1_CERT_FILE)
+        
+        return OauthApi(
+            url=self.api_url,
+            api_token=f"Bearer {api_token}",
+            ssl_context=ssl_context
+        )
+    
+    def extract(self) -> pd.DataFrame:
+        """Override extract to integrate API data with SQL data"""
+        # First get data from configured SQL sources
+        df = super().extract()
+        
+        # Then enrich with API data using class methods
+        df["monitoring_metrics"] = self._calculate_metrics(df["thresholds_raw"])
+        return df
+    
+    def _calculate_metrics(self, thresholds_raw: pd.DataFrame) -> pd.DataFrame:
+        """
+        Core business logic for calculating metrics
+        
+        Args:
+            thresholds_raw: DataFrame containing metric thresholds from SQL query
+            
+        Returns:
+            DataFrame with standardized output schema
+        """
+        # Step 1: Input Validation (REQUIRED)
+        if thresholds_raw.empty:
+            raise RuntimeError("No threshold data found. Cannot proceed with metrics calculation.")
+        
+        # Step 2: Create API connector
+        api_connector = self._get_api_connector()
+        
+        # Step 3: API Data Collection with Pagination
+        all_resources = []
+        next_record_key = None
+        
+        while True:
+            try:
+                headers = {
+                    "Accept": "application/json;v=1",  # Note: v=1 not v=1.0
+                    "Authorization": api_connector.api_token,
+                    "Content-Type": "application/json"
+                }
+                
+                payload = {
+                    # API-specific parameters
+                }
+                if next_record_key:
+                    payload["nextRecordKey"] = next_record_key
+                
+                response = api_connector.send_request(
+                    url="",  # Empty when full URL is in api_connector.url
+                    request_type="post",
+                    request_kwargs={
+                        "headers": headers,
+                        "json": payload,
+                        "verify": C1_CERT_FILE,
+                        "timeout": 120,
+                    },
+                    retry_delay=5,
+                    retry_count=3
+                )
+                
+                if response.status_code != 200:
+                    raise RuntimeError(f"API request failed: {response.status_code} - {response.text}")
+                
+                data = response.json()
+                all_resources.extend(data.get("resources", []))
+                
+                # Handle pagination
+                next_record_key = data.get("nextRecordKey")
+                if not next_record_key:
+                    break
+                    
+            except Exception as e:
+                raise RuntimeError(f"Failed to fetch resources from API: {str(e)}")
+        
+        # Step 4: Compliance Calculation
+        results = []
+        now = datetime.now()
+        
+        for _, threshold in thresholds_raw.iterrows():
+            ctrl_id = threshold["control_id"]
+            metric_id = threshold["monitoring_metric_id"]
+            
+            # Filter and analyze resources based on control requirements
+            # Calculate compliance metrics
+            # Determine compliance status
+            
+            # Step 5: Format Output with Standard Fields
+            result = {
+                "control_monitoring_utc_timestamp": now,
+                "control_id": ctrl_id,
+                "monitoring_metric_id": metric_id,
+                "monitoring_metric_value": float(compliance_percentage),
+                "monitoring_metric_status": compliance_status,
+                "metric_value_numerator": int(compliant_count),
+                "metric_value_denominator": int(total_count),
+                "resources_info": [json.dumps(resource) for resource in non_compliant_resources] if non_compliant_resources else None
+            }
+            results.append(result)
+        
+        result_df = pd.DataFrame(results)
+        
+        # Ensure correct data types to match test expectations
+        if not result_df.empty:
+            result_df = result_df.astype({
+                "metric_value_numerator": "int64",
+                "metric_value_denominator": "int64",
+                "monitoring_metric_value": "float64"
+            })
+        
+        return result_df
+
+def run(env: Env, is_load: bool = True, dq_actions: bool = True):
+    """Run the pipeline."""
+    pipeline = PLAutomatedMonitoring[ControlName](env)
+    pipeline.configure_from_filename(str(Path(__file__).parent / "config.yml"))
+    return pipeline.run(load=is_load, dq_actions=dq_actions)
+
+if __name__ == "__main__":
+    from etip_env import set_env_vars
+    
+    env = set_env_vars()
+    try:
+        run(env=env, is_load=False, dq_actions=False)
+    except Exception:
+        import sys
+        sys.exit(1)
+```
 
 ## Pipeline Development Process
 
@@ -40,145 +209,7 @@ pl_automated_monitoring_[CONTROL_ID]/
 
 **QA Environment Determination**: Some pipelines cannot be tested in QA if their data sources do not have QA alternatives. These pipelines will be tested locally only and do not require QA implementation files (`monitoring_thresholds_qa.sql`, `avro_schema_qa.json`) or QA environment configuration.
 
-### Step 2: Pipeline Class Implementation (`pipeline.py`)
-
-#### Required Class Structure
-
-```python
-from typing import Dict, Any
-import pandas as pd
-from datetime import datetime
-import json
-import ssl
-import os
-from config_pipeline import ConfigPipeline
-from connectors.api import OauthApi
-from connectors.ca_certs import C1_CERT_FILE
-from connectors.exchange.oauth_token import refresh
-from etip_env import Env
-from transform_library import transformer
-
-class PLAutomatedMonitoring[ControlName](ConfigPipeline):
-    def __init__(self, env: Env) -> None:
-        super().__init__(env)
-        self.env = env
-        # Initialize control-specific variables
-        self.api_url = f"https://{self.env.exchange.exchange_url}/[api-endpoint-path]"
-        
-    def _get_api_connector(self) -> OauthApi:
-        """Standard OAuth API connector setup following Zach's pattern"""
-        api_token = refresh(
-            client_id=self.env.exchange.client_id,
-            client_secret=self.env.exchange.client_secret,
-            exchange_url=self.env.exchange.exchange_url,
-        )
-        
-        # Create SSL context if certificate file exists
-        ssl_context = None
-        if C1_CERT_FILE:
-            ssl_context = ssl.create_default_context(cafile=C1_CERT_FILE)
-        
-        return OauthApi(
-            url=self.api_url,
-            api_token=f"Bearer {api_token}",
-            ssl_context=ssl_context
-        )
-        
-    def transform(self) -> None:
-        """Override transform to set up API context"""
-        self.context["api_connector"] = self._get_api_connector()
-        super().transform()
-```
-
-#### Required Transformer Function
-
-```python
-@transformer
-def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
-    """
-    Core business logic transformer following Zach's established patterns
-    
-    Args:
-        thresholds_raw: DataFrame containing metric thresholds from SQL query
-        context: Pipeline context including API connector
-        
-    Returns:
-        DataFrame with standardized output schema
-    """
-    
-    # Step 1: Input Validation (REQUIRED)
-    if thresholds_raw.empty:
-        raise RuntimeError("No threshold data found. Cannot proceed with metrics calculation.")
-    
-    # Step 2: Extract Threshold Configuration
-    thresholds = thresholds_raw.to_dict("records")
-    api_connector = context["api_connector"]
-    
-    # Step 3: API Data Collection with Pagination
-    all_resources = []
-    next_record_key = None
-    
-    while True:
-        try:
-            # Standard API request headers
-            headers = {
-                "Accept": "application/json;v=1",  # Note: v=1 not v=1.0
-                "Authorization": api_connector.api_token,
-                "Content-Type": "application/json"
-            }
-            
-            # Construct request payload
-            payload = {
-                # API-specific parameters
-            }
-            if next_record_key:
-                payload["nextRecordKey"] = next_record_key
-            
-            response = api_connector.post("", json=payload, headers=headers)
-            
-            if response.status_code != 200:
-                raise RuntimeError(f"API request failed: {response.status_code} - {response.text}")
-            
-            data = response.json()
-            all_resources.extend(data.get("resources", []))
-            
-            # Handle pagination
-            next_record_key = data.get("nextRecordKey")
-            if not next_record_key:
-                break
-                
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch resources from API: {str(e)}")
-    
-    # Step 4: Compliance Calculation
-    results = []
-    now = datetime.now()
-    
-    for threshold in thresholds:
-        ctrl_id = threshold["control_id"]
-        metric_id = threshold["monitoring_metric_id"]
-        
-        # Filter and analyze resources based on control requirements
-        # Calculate compliance metrics
-        # Determine compliance status
-        
-        # Step 5: Format Output with Standard Fields
-        result = {
-            "control_monitoring_utc_timestamp": now,
-            "control_id": ctrl_id,
-            "monitoring_metric_id": metric_id,
-            "monitoring_metric_value": float(compliance_percentage),
-            "monitoring_metric_status": compliance_status,
-            "metric_value_numerator": int(compliant_count),
-            "metric_value_denominator": int(total_count),
-            "resources_info": [json.dumps(resource) for resource in non_compliant_resources] if non_compliant_resources else None
-        }
-        results.append(result)
-    
-    return pd.DataFrame(results)
-```
-
-### Step 3: Configuration Setup (`config.yml`)
+### Step 2: Configuration Setup (`config.yml`)
 
 #### QA-Enabled Pipeline Configuration Structure
 
@@ -220,49 +251,23 @@ environments:
             business_application: BAENTERPRISETECHINSIGHTS
 
   local: *nonprod_config
-```
 
-#### Local-Only Pipeline Configuration Structure
-
-For pipelines without QA data source alternatives:
-
-```yaml
-pipeline:
-  name: pl_automated_monitoring_[CONTROL_ID]
-  use_test_data_on_nonprod: false
-  dq_strict_mode: false
-
-environments:
-  prod:
-    extract:
-      thresholds_raw:
-        connector: snowflake
-        options:
-          sql: "@text:sql/monitoring_thresholds.sql"
-    load:
-      monitoring_metrics:
-        - connector: onestream
-          options:
-            table_name: etip_controls_monitoring_metrics
-            file_type: AVRO
-            avro_schema: "@json:avro_schema.json"
-            business_application: BAENTERPRISETECHINSIGHTS
-
-  local:
-    extract:
-      thresholds_raw:
-        connector: snowflake
-        options:
-          sql: "@text:sql/monitoring_thresholds.sql"
-    load:
-      monitoring_metrics:
-        - connector: onestream
-          options:
-            table_name: etip_controls_monitoring_metrics
-            file_type: AVRO
-            avro_schema: "@json:avro_schema.json"
-            business_application: BAENTERPRISETECHINSIGHTS
-```
+stages:
+  - name: ingress_validation
+    description: "Validate data quality of input datasets"
+    envs: [qa, prod, local]
+  - name: extract
+    description: "Extract data from Snowflake and external APIs"
+    envs: [qa, prod, local]
+  - name: transform
+    description: "Calculate control metrics"
+    envs: [qa, prod, local]
+  - name: egress_validation
+    description: "Validate transformed metrics before loading"
+    envs: [qa, prod, local]
+  - name: load
+    description: "Load metrics to OneStream"
+    envs: [qa, prod, local]
 
 # REQUIRED: Comprehensive Data Quality Validation
 ingress_validation:
@@ -322,10 +327,73 @@ egress_validation:
         description: "Egress data will not match ingress data due to API enrichment"
 ```
 
-### Step 4: SQL Query Implementation
+#### Local-Only Pipeline Configuration Structure
+
+For pipelines without QA data source alternatives:
+
+```yaml
+pipeline:
+  name: pl_automated_monitoring_[CONTROL_ID]
+  use_test_data_on_nonprod: false
+  dq_strict_mode: false
+
+environments:
+  prod:
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+  local:
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+stages:
+  - name: ingress_validation
+    description: "Validate data quality of input datasets"
+    envs: [local, prod]
+  - name: extract
+    description: "Extract data from Snowflake and external APIs"
+    envs: [local, prod]
+  - name: transform
+    description: "Calculate control metrics"
+    envs: [local, prod]
+  - name: egress_validation
+    description: "Validate transformed metrics before loading"
+    envs: [local, prod]
+  - name: load
+    description: "Load metrics to OneStream"
+    envs: [local, prod]
+
+# Include similar ingress_validation and egress_validation sections
+# with envs: [local, prod] instead of [qa, prod]
+```
+
+### Step 3: SQL Query Implementation
 
 #### Production SQL (`sql/monitoring_thresholds.sql`)
 
+**Single-Control Pipelines:**
 ```sql
 -- sqlfluff:dialect:snowflake
 -- sqlfluff:templater:placeholder:param_style:pyformat
@@ -343,8 +411,30 @@ select
 from
     etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
 where 
-    metric_threshold_end_date is Null
-    and control_id = '[CONTROL_ID]'
+    metric_threshold_end_date is null
+    and control_id = 'CTRL-1077231'
+```
+
+**Multi-Control Pipelines:**
+```sql
+-- sqlfluff:dialect:snowflake
+-- sqlfluff:templater:placeholder:param_style:pyformat
+select
+    monitoring_metric_id,
+    control_id,
+    monitoring_metric_tier,
+    metric_name,
+    metric_description,
+    warning_threshold,
+    alerting_threshold,
+    control_executor,
+    metric_threshold_start_date,
+    metric_threshold_end_date
+from
+    etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
+where 
+    metric_threshold_end_date is null
+    and control_id in ('CTRL-1077224', 'CTRL-1077231', 'CTRL-1077125')
 ```
 
 #### QA SQL (`sql/monitoring_thresholds_qa.sql`)
@@ -366,143 +456,26 @@ select
 from
     etip_db.qhdp_techcos.dim_controls_monitoring_metrics
 where 
-    metric_threshold_end_date is Null
-    and control_id = '[CONTROL_ID]'
+    metric_threshold_end_date is null
+    and control_id = 'CTRL-1077231'  -- or control_id in (...) for multi-control
 ```
 
-### Step 5: Avro Schema Definition
-
-#### Production Schema (`avro_schema.json`)
-
-Production schemas include comprehensive metadata for data governance:
-
-```json
-{
-  "name": "etip_controls_monitoring_metrics",
-  "namespace": "com.capitalone.BAENTERPRISETECHINSIGHTS", 
-  "doc": "This dataset is used for analytics and reporting for the Tech Controls Health Monitoring process. Th",
-  "type": "record",
-  "fields": [
-    {
-      "name": "monitoring_metric_id",
-      "dmslCatalog": {
-        "privacyDetails": {
-          "category": "NOT_APPLICABLE",
-          "exclusionCategory": "NOT_APPLICABLE", 
-          "identifyingKey": "NOT_APPLICABLE"
-        },
-        "dataProtectionType": "NONE",
-        "physicalName": "monitoring_metric_id",
-        "dataQualityDetails": {
-          "allowedValues": [],
-          "isOptional": false,
-          "orderNumber": 0
-        },
-        "dataSensitivity": {
-          "hasCreditInformation": false,
-          "hasPersonallyIdentifiableInformation": false,
-          "hasBankAccountNumber": false,
-          "hasPaymentCardIndustry": false,
-          "hasAssociatePersonalInformation": false,
-          "hasNonPublicInformation": false
-        }
-      },
-      "doc": "A unique identifier for a monitoring metric",
-      "type": "int",
-      "tokenization": {"type": "NOT_APPLICABLE"}
-    }
-    // Additional fields with similar structure...
-  ]
-}
-```
-
-#### QA Schema (`avro_schema_qa.json`) - Required for QA-Enabled Pipelines Only
-
-QA schemas include additional metadata elements for enhanced validation:
-
-```json
-{
-  "name": "fact_controls_monitoring_metrics_daily_v4",
-  "namespace": "com.capitalone.BAENTERPRISETECHINSIGHTS",
-  "doc": "This dataset is used for analytics and reporting for the Tech Controls Health Monitoring process. Th",
-  "fields": [
-    {
-      "name": "monitoring_metric_id",
-      "doc": "A unique identifier for a monitoring metric",
-      "type": "int",
-      "tokenization": {
-        "type": "NOT_APPLICABLE"
-      },
-      "dmslCatalog": {
-        "dataProtectionType": "NONE",
-        "dataQualityDetails": {
-          "isOptional": false,
-          "orderNumber": 0
-        },
-        "dataSensitivity": {
-          "hasAssociatePersonalInformation": false,
-          "hasBankAccountNumber": false,
-          "hasCreditInformation": false,
-          "hasNonPublicInformation": false,
-          "hasPaymentCardIndustry": false,
-          "hasPersonallyIdentifiableInformation": false
-        },
-        "elementId": "24750646",
-        "isAuthoritativeSource": false,
-        "isHighPriority": false,
-        "physicalName": "monitoring_metric_id",
-        "privacyDetails": {
-          "category": "NOT_APPLICABLE",
-          "exclusionCategory": "NOT_APPLICABLE",
-          "identifyingKey": "NOT_APPLICABLE"
-        },
-        "tokenizationDetails": {
-          "tokenizationClassification": "NOT_APPLICABLE"
-        }
-      },
-      "path": ".control_id"
-    }
-    // Additional fields with similar metadata structure...
-  ],
-  "type": "record"
-}
-```
-
-#### Key Differences Between Production and QA Schemas
-
-**Production Schema (`avro_schema.json`)**:
-- **Record Name**: `"etip_controls_monitoring_metrics"` (production table name)
-- **Compact Format**: Single-line JSON format for efficiency
-- **Standard Metadata**: Includes `dmslCatalog`, `privacyDetails`, `dataQualityDetails`, `dataSensitivity`
-- **Purpose**: Full data governance compliance for production environment
-
-**QA Schema (`avro_schema_qa.json`)**:
-- **Record Name**: `"fact_controls_monitoring_metrics_daily_v4"` (QA table name)
-- **Formatted JSON**: Multi-line, readable format for development
-- **Enhanced Metadata**: All production metadata PLUS additional QA-specific elements:
-  - `elementId` for tracking individual schema elements
-  - `isAuthoritativeSource` and `isHighPriority` flags
-  - `tokenizationDetails` with classification information
-  - `path` field for element mapping
-- **Purpose**: Enhanced validation and testing capabilities in QA environment
-
-**Note**: Local-only pipelines (those without QA data source alternatives) only require `avro_schema.json` and do not need `avro_schema_qa.json`.
-
-### Step 6: Unit Test Implementation
+### Step 4: Unit Test Implementation
 
 #### Test File Structure (`tests/pipelines/test_pl_automated_monitoring_[CONTROL_ID].py`)
 
 ```python
 import pytest
 import pandas as pd
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from freezegun import freeze_time
 from datetime import datetime
+from requests import Response, RequestException
 
-# Import pipeline components
-from pl_automated_monitoring_[CONTROL_ID].pipeline import (
+# Import pipeline components - ALWAYS use pipelines. prefix
+from pipelines.pl_automated_monitoring_[CONTROL_ID].pipeline import (
     PLAutomatedMonitoring[ControlName],
-    calculate_metrics
+    run
 )
 
 # Standard test constants
@@ -527,46 +500,18 @@ class MockEnv:
     def __init__(self):
         self.exchange = MockExchangeConfig()
 
-class MockOauthApi:
-    def __init__(self, url, api_token, ssl_context=None):
-        self.url = url
-        self.api_token = api_token
-        self.response = None
-        self.side_effect = None
-    
-    def send_request(self, url, request_type, request_kwargs, retry_delay=5):
-        """Mock send_request method with proper side_effect handling."""
-        if self.side_effect:
-            if isinstance(self.side_effect, Exception):
-                raise self.side_effect
-            elif isinstance(self.side_effect, list) and self.side_effect:
-                response = self.side_effect.pop(0)
-                if isinstance(response, Exception):
-                    raise response
-                return response
-        
-        if self.response:
-            return self.response
-        
-        # Return default response if none configured
-        from requests import Response
-        default_response = Response()
-        default_response.status_code = 200
-        return default_response
-
 def _mock_threshold_df():
     """Utility function for test threshold data"""
     return pd.DataFrame([{
         "monitoring_metric_id": "test_metric",
-        "control_id": "[CONTROL_ID]",
-        "monitoring_metric_tier": 1,
-        "warning_threshold": 80.0,
-        "alerting_threshold": 90.0
+        "control_id": "CTRL-1077231",
+        "monitoring_metric_tier": "Tier 1",
+        "warning_threshold": 97.0,
+        "alerting_threshold": 95.0
     }])
 
 def generate_mock_api_response(content=None, status_code=200):
     """Generate standardized mock API response."""
-    from requests import Response
     import json
     
     mock_response = Response()
@@ -580,46 +525,47 @@ def generate_mock_api_response(content=None, status_code=200):
     return mock_response
 
 @freeze_time("2024-11-05 12:09:00")
-def test_calculate_metrics_success(mock):
-    """Test successful metrics calculation"""
+def test_calculate_metrics_success():
+    """Test successful metrics calculation using extract method"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoring[ControlName](env)
+    
     # Setup test data
     thresholds_df = _mock_threshold_df()
     
     # Mock API response
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "resources": [{"id": "resource1", "compliant": True}],
-        "nextRecordKey": None
-    }
-    
-    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
-    mock_api.response = mock_response
-    
-    context = {"api_connector": mock_api}
-    
-    # Execute transformer
-    result = calculate_metrics(thresholds_df, context)
-    
-    # Assertions
-    assert isinstance(result, pd.DataFrame)
-    assert not result.empty
-    assert list(result.columns) == AVRO_SCHEMA_FIELDS
-    
-    # Verify data types
-    row = result.iloc[0]
-    assert isinstance(row["control_monitoring_utc_timestamp"], datetime)
-    assert isinstance(row["monitoring_metric_value"], float)
-    assert isinstance(row["metric_value_numerator"], int)
-    assert isinstance(row["metric_value_denominator"], int)
+    with patch('pipelines.pl_automated_monitoring_[CONTROL_ID].pipeline.OauthApi') as mock_oauth:
+        mock_api_instance = Mock()
+        mock_oauth.return_value = mock_api_instance
+        
+        mock_response = generate_mock_api_response({
+            "resources": [{"id": "resource1", "compliant": True}],
+            "nextRecordKey": None
+        })
+        mock_api_instance.send_request.return_value = mock_response
+        
+        # Call _calculate_metrics directly on pipeline instance
+        result = pipeline._calculate_metrics(thresholds_df)
+        
+        # Assertions
+        assert isinstance(result, pd.DataFrame)
+        assert not result.empty
+        assert list(result.columns) == AVRO_SCHEMA_FIELDS
+        
+        # Verify data types using pandas type checking
+        assert pd.api.types.is_integer_dtype(result["metric_value_numerator"])
+        assert pd.api.types.is_integer_dtype(result["metric_value_denominator"])
+        assert pd.api.types.is_float_dtype(result["monitoring_metric_value"])
 
 def test_calculate_metrics_empty_thresholds():
     """Test error handling for empty thresholds"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoring[ControlName](env)
+    
     empty_df = pd.DataFrame()
-    context = {"api_connector": Mock()}
     
     with pytest.raises(RuntimeError, match="No threshold data found"):
-        calculate_metrics(empty_df, context)
+        pipeline._calculate_metrics(empty_df)
 
 def test_pipeline_initialization():
     """Test pipeline class initialization"""
@@ -630,79 +576,122 @@ def test_pipeline_initialization():
     assert hasattr(pipeline, 'api_url')
     assert 'test-exchange.com' in pipeline.api_url
 
-def test_pipeline_run_method(mock):
-    """Test pipeline run method with default parameters"""
+def test_extract_method_integration():
+    """Test the extract method integration with super().extract()"""
     env = MockEnv()
     pipeline = PLAutomatedMonitoring[ControlName](env)
     
-    # Mock the run method
-    mock_run = mock.patch.object(pipeline, 'run')
-    pipeline.run()
-    
-    # Verify run was called with default parameters
-    mock_run.assert_called_once_with()
-
-def test_api_error_handling(mock):
-    """Test API error handling and exception wrapping"""
-    # Test network errors
-    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
-    mock_api.side_effect = RequestException("Connection error")
-    
-    context = {"api_connector": mock_api}
-    
-    # Should wrap exception in RuntimeError
-    with pytest.raises(RuntimeError, match="API request failed"):
-        calculate_metrics(_mock_threshold_df(), context)
-
-def test_pagination_handling(mock):
-    """Test API pagination with multiple responses"""
-    # Create paginated responses
-    page1_response = generate_mock_api_response({
-        "resources": [{"id": "resource1"}],
-        "nextRecordKey": "page2_key"
-    })
-    page2_response = generate_mock_api_response({
-        "resources": [{"id": "resource2"}],
-        "nextRecordKey": None
+    # Mock super().extract() to return test data
+    mock_df = pd.DataFrame({
+        "thresholds_raw": [_mock_threshold_df()]
     })
     
-    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
-    mock_api.side_effect = [page1_response, page2_response]
-    
-    context = {"api_connector": mock_api}
-    result = calculate_metrics(_mock_threshold_df(), context)
-    
-    # Verify both pages were processed
-    assert not result.empty
-
-def test_main_function_execution(mock):
-    """Test main function execution path"""
-    mock_env = mock.Mock()
-    
-    with mock.patch("etip_env.set_env_vars", return_value=mock_env):
-        with mock.patch("pipelines.[module].pipeline.run") as mock_run:
-            with mock.patch("sys.exit") as mock_exit:
-                # Execute main block
-                code = """
-if True:
-    from etip_env import set_env_vars
-    from pipelines.[module].pipeline import run
-    
-    env = set_env_vars()
-    try:
-        run(env=env, is_load=False, dq_actions=False)
-    except Exception as e:
-        import sys
-        sys.exit(1)
-"""
-                exec(code)
+    with patch.object(PLAutomatedMonitoring[ControlName], '__bases__', (Mock,)):
+        with patch('pipelines.pl_automated_monitoring_[CONTROL_ID].pipeline.ConfigPipeline.extract') as mock_super:
+            mock_super.return_value = mock_df
+            
+            with patch.object(pipeline, '_calculate_metrics') as mock_calc:
+                mock_metrics = pd.DataFrame({"test": [1, 2, 3]})
+                mock_calc.return_value = mock_metrics
                 
-                # Verify success path
-                assert not mock_exit.called
-                mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
+                result = pipeline.extract()
+                
+                # Verify super().extract() was called
+                mock_super.assert_called_once()
+                
+                # Verify _calculate_metrics was called with correct data
+                mock_calc.assert_called_once()
+                
+                # Verify the result has monitoring_metrics column
+                assert "monitoring_metrics" in result.columns
+                assert result["monitoring_metrics"].iloc[0].equals(mock_metrics)
+
+def test_api_error_handling():
+    """Test API error handling and exception wrapping"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoring[ControlName](env)
+    
+    with patch('pipelines.pl_automated_monitoring_[CONTROL_ID].pipeline.OauthApi') as mock_oauth:
+        mock_api_instance = Mock()
+        mock_oauth.return_value = mock_api_instance
+        mock_api_instance.send_request.side_effect = RequestException("Connection error")
+        
+        with pytest.raises(RuntimeError, match="Failed to fetch"):
+            pipeline._calculate_metrics(_mock_threshold_df())
+
+def test_run_function():
+    """Test pipeline run function"""
+    env = MockEnv()
+    
+    with patch('pipelines.pl_automated_monitoring_[CONTROL_ID].pipeline.PLAutomatedMonitoring[ControlName]') as mock_pipeline_class:
+        mock_pipeline = Mock()
+        mock_pipeline_class.return_value = mock_pipeline
+        mock_pipeline.run.return_value = "test_result"
+        
+        result = run(env, is_load=False, dq_actions=True)
+        
+        mock_pipeline_class.assert_called_once_with(env)
+        mock_pipeline.configure_from_filename.assert_called_once()
+        mock_pipeline.run.assert_called_once_with(load=False, dq_actions=True)
+        assert result == "test_result"
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
 ```
 
-## Development Standards & Requirements
+## Advanced Patterns for Complex Pipelines
+
+### Multi-Control Pipeline Pattern
+
+For pipelines handling multiple related controls, use a consolidated approach with control configuration mapping:
+
+```python
+# Control configuration at module level
+CONTROL_CONFIGS = {
+    "CTRL-1077224": {
+        "resource_type": "AWS::KMS::Key",
+        "config_key": "supplementaryConfiguration.KeyRotationStatus",
+        "config_location": "supplementaryConfiguration",
+        "expected_value": "TRUE",
+        "apply_kms_exclusions": True,
+        "description": "KMS Key Rotation Status"
+    },
+    "CTRL-1077231": {
+        "resource_type": "AWS::EC2::Instance",
+        "config_key": "configuration.metadataOptions.httpTokens",
+        "config_location": "configurationList",
+        "expected_value": "required",
+        "apply_kms_exclusions": False,
+        "description": "EC2 Instance Metadata Service v2"
+    }
+}
+
+class PLAutomatedMonitoringMultiControl(ConfigPipeline):
+    def _calculate_metrics(self, thresholds_raw: pd.DataFrame) -> pd.DataFrame:
+        # Group by control_id for efficient processing
+        control_groups = thresholds_raw.groupby('control_id')
+        required_controls = list(control_groups.groups.keys())
+        
+        # Fetch resources once per resource type
+        all_resources = self._fetch_resources_by_type(required_controls)
+        
+        # Process each control
+        all_results = []
+        for control_id, control_thresholds in control_groups:
+            if control_id not in CONTROL_CONFIGS:
+                continue
+            
+            control_config = CONTROL_CONFIGS[control_id]
+            resources = all_resources.get(control_config["resource_type"], [])
+            control_results = self._calculate_control_compliance(
+                control_id, control_thresholds, resources, control_config
+            )
+            all_results.extend(control_results)
+        
+        return pd.DataFrame(all_results)
+```
+
+## Production Standards & Requirements
 
 ### API Integration Standards
 
@@ -713,6 +702,10 @@ if True:
 5. **SSL Certificates**: Implement `C1_CERT_FILE` for secure connections
 6. **Pagination Handling**: Process `nextRecordKey` for large result sets
 7. **Error Wrapping**: Wrap API exceptions in `RuntimeError` with descriptive context
+8. **Use send_request method**: Always use the `send_request` method from OauthApi for proper error handling and retries
+9. **Empty URL for relative paths**: When the full URL is in the connector, pass empty string to send_request
+10. **Proper parameter naming**: Use `retry_count` (not `max_retries`) for consistency
+11. **Certificate handling**: Always include SSL certificate verification when available
 
 ### Data Processing Standards
 
@@ -752,187 +745,46 @@ All pipelines must output data with these exact field names and types:
    - Production: `@json:avro_schema.json`
    - QA: `@json:avro_schema_qa.json` (QA-enabled pipelines only)
 6. **Data Quality Checks**: Comprehensive validation with `informational: true` flags where appropriate
-7. **QA Environment Determination**: Pipelines requiring QA testing must have data sources with QA alternatives. Pipelines without QA data source alternatives will be tested locally only.
+7. **Stages Section**: Include stages section for complex validation requirements
 
 ### Testing Requirements
 
 #### Critical Import and Mock Standards
 
-1. **Import Patterns**: ALWAYS use the `pipelines.` prefix for all pipeline imports to ensure proper module resolution:
-   ```python
-   # ✅ CORRECT - Use pipelines prefix
-   import pipelines.pl_automated_monitoring_ctrl_1077231.pipeline as pipeline
-   from pipelines.pl_automated_monitoring_cloud_custodian import transform
-   
-   # ❌ WRONG - Missing pipelines prefix will cause ModuleNotFoundError
-   from pl_automated_monitoring_cloudradar_controls.pipeline import calculate_metrics
-   ```
-
-2. **Mock Parameter Usage**: Do NOT add unused `mock` parameters to test functions unless you're actually using pytest-mock functionality:
-   ```python
-   # ✅ CORRECT - No unused mock parameter
-   def test_calculate_metrics_success():
-       """Test successful metrics calculation"""
-       
-   # ❌ WRONG - Unused mock parameter causes "fixture 'mock' not found" error
-   def test_calculate_metrics_success(mock):
-       """Test successful metrics calculation"""
-   ```
-
-3. **MockEnv Class Standards**: Use complete MockEnv implementation that matches working test patterns:
-   ```python
-   # ✅ CORRECT - Complete MockEnv with all required attributes
-   class MockExchangeConfig:
-       def __init__(self):
-           self.client_id = "test_client"
-           self.client_secret = "test_secret"
-           self.exchange_url = "test-exchange.com"
-
-   class MockEnv:
-       def __init__(self):
-           self.exchange = MockExchangeConfig()
-           # Add any other attributes the pipeline framework expects
-   ```
+1. **Import Patterns**: ALWAYS use the `pipelines.` prefix for all pipeline imports to ensure proper module resolution
+2. **Mock Parameter Usage**: Do NOT add unused `mock` parameters to test functions unless you're actually using pytest-mock functionality
+3. **MockEnv Class Standards**: Use complete MockEnv implementation that matches working test patterns
+4. **Test Class Methods Directly**: Test pipeline class methods (_calculate_metrics) instead of transformer functions
+5. **Extract Method Testing**: Include tests for the extract() method integration
 
 #### Standard Testing Requirements
 
-4. **Timestamp Testing**: Use `freeze_time` for consistent datetime testing
-5. **Context Initialization**: Always initialize `pipeline.context = {}` in tests
-6. **Mock API Connectors**: Use `MockOauthApi` class pattern with proper `send_request` method
-7. **Utility Functions**: Create `_mock_threshold_df()` and similar helper functions
-8. **Coverage Requirements**: Achieve 80%+ code coverage of the pipeline.py file with end-to-end testing
-9. **Error Testing**: Include negative test cases for API failures and empty data
-10. **API Response Generation**: Use standardized `generate_mock_api_response()` function
-11. **Exception Wrapping**: Wrap all API exceptions in `RuntimeError` with descriptive messages
-12. **Function Parameter Testing**: Only pass parameters that exist in function signatures
-13. **Main Function Testing**: Include tests for module execution paths
-
-#### Test Failure Prevention
-
-**Common Test Failure Patterns to Avoid:**
-
-1. **"fixture 'mock' not found"** - Remove unused `mock` parameters from test function signatures
-2. **"ModuleNotFoundError"** - Always use `pipelines.` prefix in imports
-3. **"AttributeError: 'MockEnv' object has no attribute 'env'"** - Use complete MockEnv class implementation
-4. **Import path resolution errors** - Follow the exact import patterns from working test files
-
-**Proactive Test Validation**: Read each individual unit test and flag any that will fail due to these common error patterns. Fix them before committing.
-
-#### Updating Tests After Architectural Changes
-
-When refactoring pipeline architecture (like converting to standalone helper functions), update related tests:
-
-**❌ OBSOLETE - Tests for old problematic patterns:**
-```python
-def test_calculate_metrics_with_env_fix():
-    # This test was written to work around the old pipeline instantiation issue
-    with patch('pipeline.PLAutomatedMonitoring') as mock_pipeline_class:
-        mock_pipeline_class.return_value = mock_pipeline
-        result = calculate_metrics(thresholds_df, context)
-        mock_pipeline_class.assert_called_once_with(None)  # Will fail after fix
-```
-
-**✅ UPDATED - Tests for new architecture:**
-```python
-def test_calculate_metrics_standalone_architecture():
-    # Test that transformer works with standalone function architecture
-    result = calculate_metrics(thresholds_df, context)
-    assert not result.empty
-    assert list(result.columns) == AVRO_SCHEMA_FIELDS
-    # No pipeline mocking needed - tests the actual standalone functions
-```
-
-### File Organization Requirements
-
-1. **Directory Structure**: Follow exact structure with `sql/` subdirectory
-2. **Naming Conventions**: `pl_automated_monitoring_[CONTROL_ID]` format
-3. **SQL Files**: 
-   - **QA-Enabled Pipelines**: Both `monitoring_thresholds.sql` and `monitoring_thresholds_qa.sql`
-   - **Local-Only Pipelines**: Only `monitoring_thresholds.sql`
-4. **Avro Schema Files**:
-   - **QA-Enabled Pipelines**: Both `avro_schema.json` and `avro_schema_qa.json`
-   - **Local-Only Pipelines**: Only `avro_schema.json`
-5. **Import Paths**: Match filesystem exactly (case-sensitive)
-6. **Test Files**: Mirror pipeline structure in `tests/pipelines/` directory
-
-### Mandatory Validations
-
-1. **Empty Thresholds Check**: Validate input data exists
-2. **API Response Validation**: Check status codes and response structure  
-3. **DataFrame Type Verification**: Ensure correct data types before returning
-4. **Division by Zero Protection**: Handle edge cases in percentage calculations
-5. **Configuration Validation**: Verify all required config sections exist
-
-### Pipeline Architecture Standards
-
-#### Helper Function Design
-
-**CRITICAL**: Transformer functions must NOT instantiate pipeline classes. This causes test failures and breaks the separation of concerns.
-
-**❌ WRONG - Do NOT instantiate pipeline classes in transformers:**
-```python
-@transformer
-def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
-    # This will cause "'NoneType' object has no attribute 'env'" errors in tests
-    pipeline = PLAutomatedMonitoringControlName(None)  # BAD!
-    results = pipeline._helper_method(data)
-    return results
-```
-
-**✅ CORRECT - Use standalone helper functions:**
-```python
-# Define helper functions outside the class as standalone functions
-def _fetch_resources_by_type(api_connector: OauthApi, required_controls: List[str]) -> Dict[str, List[Dict]]:
-    """Standalone helper function that doesn't need pipeline instance"""
-    # Implementation here
-    return {}
-
-@transformer  
-def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
-    api_connector = context["api_connector"]
-    # Call standalone functions directly
-    all_resources = _fetch_resources_by_type(api_connector, required_controls)
-    return pd.DataFrame(results)
-
-class PLAutomatedMonitoringControlName(ConfigPipeline):
-    def _fetch_resources_by_type(self, api_connector: OauthApi, required_controls: List[str]) -> Dict[str, List[Dict]]:
-        """Instance method delegates to standalone function"""
-        return _fetch_resources_by_type(api_connector, required_controls)
-```
-
-**Reference Implementation**: Follow the pattern used in `pl_automated_monitoring_cloud_custodian` where helper functions are standalone and don't require pipeline instantiation.
+1. **Timestamp Testing**: Use `freeze_time` for consistent datetime testing
+2. **Mock API Connectors**: Use proper mocking patterns for OauthApi
+3. **Utility Functions**: Create `_mock_threshold_df()` and similar helper functions
+4. **Coverage Requirements**: Achieve 80%+ code coverage of the pipeline.py file
+5. **Error Testing**: Include negative test cases for API failures and empty data
+6. **API Response Generation**: Use standardized `generate_mock_api_response()` function
+7. **Exception Wrapping**: Wrap all API exceptions in `RuntimeError` with descriptive messages
+8. **Data Type Testing**: Use pandas type checking for DataFrame columns
 
 #### Data Type Standards in Tests
 
-**CRITICAL**: When testing DataFrame outputs, account for pandas/numpy data types.
-
-**❌ WRONG - Testing for Python built-in types:**
+**Use pandas type checking for DataFrame outputs:**
 ```python
 def test_data_types():
-    result = calculate_metrics(thresholds_df, context)
-    row = result.iloc[0]
-    assert isinstance(row["metric_value_numerator"], int)  # Will fail - pandas uses numpy.int64
-    assert isinstance(row["monitoring_metric_value"], float)  # May fail - could be numpy.float64
-```
-
-**✅ CORRECT - Testing for pandas-compatible data types:**
-```python
-def test_data_types():
-    result = calculate_metrics(thresholds_df, context)
-    row = result.iloc[0]
+    result = pipeline._calculate_metrics(thresholds_df)
     # Use pandas type checking for integer columns
     assert pd.api.types.is_integer_dtype(result["metric_value_numerator"])
     assert pd.api.types.is_integer_dtype(result["metric_value_denominator"])
-    # Float types are more flexible
-    assert isinstance(row["monitoring_metric_value"], (float, pd.api.types.is_float_dtype))
+    assert pd.api.types.is_float_dtype(result["monitoring_metric_value"])
 ```
 
 #### Pipeline Data Type Enforcement
 
-**REQUIRED**: Ensure consistent data types in pipeline outputs:
+**Ensure consistent data types in pipeline outputs:**
 ```python
-@transformer
-def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
+def _calculate_metrics(self, thresholds_raw: pd.DataFrame) -> pd.DataFrame:
     # ... calculation logic ...
     
     result_df = pd.DataFrame(all_results)
@@ -948,85 +800,21 @@ def calculate_metrics(thresholds_raw: pd.DataFrame, context: Dict[str, Any]) -> 
     return result_df
 ```
 
-### Common Anti-Patterns to Avoid
-
-1. **Hardcoded Values**: Never hardcode control IDs, use config files
-2. **Missing Context**: Always initialize pipeline context in tests
-3. **Type Mismatches**: Ensure DataFrame columns match expected types
-4. **Inconsistent Field Names**: Use standardized output field names across environments
-5. **Self-Mocking in Tests**: Don't mock the function being tested
-6. **Missing Error Handling**: Always wrap API calls in try-catch blocks
-7. **Timestamp Inconsistencies**: Use consistent datetime handling in tests and code
-
 ## Code Quality and Linting Standards
 
 ### Python Code Quality Requirements
 
 #### Import Management
 1. **No Unused Imports**: All imports must be used. Remove any unused imports immediately.
-   ```python
-   # ❌ BAD - Unused import
-   from connectors.ca_certs import C1_CERT_FILE  # If not used
-   
-   # ✅ GOOD - Only import what you use
-   from connectors.ca_certs import C1_CERT_FILE
-   ssl_context = ssl.create_default_context(cafile=C1_CERT_FILE)
-   ```
-
 2. **No Hallucinated Imports**: Never import modules or frameworks that don't exist in the codebase. Always verify imports against existing codebase structure.
-   ```python
-   # ❌ BAD - Non-existent import
-   from pipeline.framework import SomeModule  # Does not exist
-   from fake_library import NonExistentClass
-   
-   # ✅ GOOD - Use only verified existing imports
-   from config_pipeline import ConfigPipeline
-   from transform_library import transformer
-   from etip_env import Env
-   ```
-
 3. **No Unused Variables**: All variables must be used. Remove any unused variable assignments.
-   ```python
-   # ❌ BAD - Unused variable
-   thresholds = thresholds_raw.to_dict("records")  # If never used
-   
-   # ✅ GOOD - Use the variable or remove it
-   thresholds = thresholds_raw.to_dict("records")
-   for threshold in thresholds:
-       # Process threshold
-   ```
-
-3. **Import Organization**: Follow standard Python import ordering:
-   ```python
-   # Standard library imports
-   import json
-   import ssl
-   import sys
-   from datetime import datetime
-   from typing import Dict, Any
-   
-   # Third-party imports
-   import pandas as pd
-   
-   # Local application imports
-   from config_pipeline import ConfigPipeline
-   from connectors.api import OauthApi
-   from connectors.ca_certs import C1_CERT_FILE
-   from connectors.exchange.oauth_token import refresh
-   from etip_env import Env
-   from transform_library import transformer
-   ```
+4. **Import Organization**: Follow standard Python import ordering (standard library, third-party, local application)
 
 #### Code Style Standards
 1. **Line Length**: Maximum 88 characters per line (Black standard)
 2. **Function Naming**: Use snake_case for all functions and variables
 3. **Class Naming**: Use PascalCase for class names
 4. **Constant Naming**: Use UPPER_SNAKE_CASE for constants
-
-#### Variable Usage Rules
-1. **Immediate Usage**: If you assign a variable, use it within the same function
-2. **Parameter Usage**: All function parameters must be used or explicitly marked as unused
-3. **Context Variables**: Always use extracted context variables
 
 ### SQL Quality Standards
 
@@ -1038,80 +826,20 @@ All SQL files MUST include the required SQLFluff headers:
 -- sqlfluff:templater:placeholder:param_style:pyformat
 ```
 
-**Example SQL File Structure:**
-```sql
--- sqlfluff:dialect:snowflake
--- sqlfluff:templater:placeholder:param_style:pyformat
-select
-    monitoring_metric_id,
-    control_id,
-    monitoring_metric_tier,
-    metric_name,
-    metric_description,
-    warning_threshold,
-    alerting_threshold,
-    control_executor,
-    metric_threshold_start_date,
-    metric_threshold_end_date
-from
-    etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
-where 
-    metric_threshold_end_date is null
-    and control_id = 'CTRL-1077125'
-```
-
 #### SQL Formatting Rules
 1. **Keywords**: Use lowercase for SQL keywords (`select`, `from`, `where`, `and`, `or`)
 2. **Indentation**: Use 4 spaces for indentation
 3. **Column Alignment**: Align column names in SELECT statements
-4. **Table Aliases**: Use meaningful aliases when joining tables
-5. **Comments**: Include SQLFluff directives at the top of every SQL file
-6. **Control ID Filtering**: For single-control pipelines, always include the specific control ID as a filter in SQL queries
-   ```sql
-   -- ✅ GOOD - Include control ID filter for single-control pipelines
-   select
-       monitoring_metric_id,
-       control_id,
-       monitoring_metric_tier
-   from
-       etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
-   where 
-       metric_threshold_end_date is null
-       and control_id = 'CTRL-1077231'  -- Always filter by specific control ID
-   
-   -- ❌ BAD - Missing control ID filter
-   select
-       monitoring_metric_id,
-       control_id,
-       monitoring_metric_tier
-   from
-       etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
-   where 
-       metric_threshold_end_date is null  -- Missing control_id filter
-   ```
+4. **Comments**: Include SQLFluff directives at the top of every SQL file
+5. **Control ID Filtering**: For single-control pipelines, always include the specific control ID as a filter in SQL queries
 
 ### Pre-commit Check Requirements
 
 #### Before Every Commit
 1. **Run Flake8**: Check for unused imports and variables
-   ```bash
-   flake8 src/pipelines/ tests/
-   ```
-
 2. **Run isort**: Organize imports properly
-   ```bash
-   isort src/pipelines/ tests/
-   ```
-
 3. **Run Black**: Format code consistently
-   ```bash
-   black src/pipelines/ tests/
-   ```
-
 4. **Run SQLFluff**: Validate SQL files
-   ```bash
-   sqlfluff fix src/pipelines/*/sql/*.sql
-   ```
 
 #### Common Linting Violations to Avoid
 
@@ -1119,7 +847,6 @@ where
 ```python
 # ❌ BAD
 from etip_env import set_env_vars  # Not used anywhere
-import os  # Imported but never used
 
 # ✅ GOOD - Remove unused import or use it
 if __name__ == "__main__":
@@ -1134,143 +861,44 @@ def calculate_metrics(thresholds_raw, context):
     thresholds = thresholds_raw.to_dict("records")  # Never used
     return pd.DataFrame([])
 
-# ❌ BAD - Unused exception variable
-try:
-    run(env=env, is_load=False, dq_actions=False)
-except Exception as e:  # Variable 'e' assigned but never used
-    import sys
-    sys.exit(1)
-
-# ❌ BAD - Unused assignment in tests
-def test_ssl_context_handling():
-    connector = pipeline._get_api_connector()  # Variable assigned but never used
-    mock_ssl.assert_called_once()
-
 # ✅ GOOD - Use the variable or remove assignment
 def calculate_metrics(thresholds_raw, context):
     thresholds = thresholds_raw.to_dict("records")
-    results = []
     for threshold in thresholds:  # Now it's used
         # Process threshold
         pass
     return pd.DataFrame(results)
-
-# ✅ GOOD - Don't capture exception if not needed
-try:
-    run(env=env, is_load=False, dq_actions=False)
-except Exception:  # No variable assignment
-    import sys
-    sys.exit(1)
-
-# ✅ GOOD - Remove unused assignment
-def test_ssl_context_handling():
-    pipeline._get_api_connector()  # Method called but result not stored
-    mock_ssl.assert_called_once()
 ```
 
-**Critical Linting Patterns to Check Before Commit:**
+### Mandatory Validations
 
-1. **Exception Handlers**: If you don't use the exception variable in the handler, don't capture it:
-   ```python
-   # ❌ BAD
-   except Exception as e:
-       sys.exit(1)  # 'e' never used
-   
-   # ✅ GOOD  
-   except Exception:
-       sys.exit(1)
-   ```
+1. **Empty Thresholds Check**: Validate input data exists
+2. **API Response Validation**: Check status codes and response structure  
+3. **DataFrame Type Verification**: Ensure correct data types before returning
+4. **Division by Zero Protection**: Handle edge cases in percentage calculations
+5. **Configuration Validation**: Verify all required config sections exist
 
-2. **Test Assignments**: Don't assign method return values if you don't use them:
-   ```python
-   # ❌ BAD
-   result = some_method_call()  # 'result' never used
-   
-   # ✅ GOOD
-   some_method_call()  # Call method without assignment
-   ```
+### File Organization Requirements
 
-3. **Import Cleanup**: Remove any imports that become unused after refactoring:
-   ```python
-   # ❌ BAD - Left over from previous implementation
-   import os  # Was used before but not anymore
-   
-   # ✅ GOOD - Remove completely
-   # (no import line)
-   ```
+1. **Directory Structure**: Follow exact structure with `sql/` subdirectory
+2. **Naming Conventions**: `pl_automated_monitoring_[CONTROL_ID]` format
+3. **SQL Files**: 
+   - **QA-Enabled Pipelines**: Both `monitoring_thresholds.sql` and `monitoring_thresholds_qa.sql`
+   - **Local-Only Pipelines**: Only `monitoring_thresholds.sql`
+4. **Avro Schema Files**:
+   - **QA-Enabled Pipelines**: Both `avro_schema.json` and `avro_schema_qa.json`
+   - **Local-Only Pipelines**: Only `avro_schema.json`
+5. **Import Paths**: Match filesystem exactly (case-sensitive)
+6. **Test Files**: Mirror pipeline structure in `tests/pipelines/` directory
 
-### Automated Code Quality Checklist
+## Common Anti-Patterns to Avoid
 
-#### Required Python Standards
-- [ ] No unused imports (F401)
-- [ ] No unused variables (F841)
-- [ ] Proper import ordering (isort)
-- [ ] Consistent formatting (Black)
-- [ ] Line length ≤ 88 characters
-- [ ] Type hints for all function parameters
-- [ ] Docstrings for all public functions
+1. **Hardcoded Values**: Never hardcode control IDs, use config files
+2. **Type Mismatches**: Ensure DataFrame columns match expected types
+3. **Inconsistent Field Names**: Use standardized output field names across environments
+4. **Missing Error Handling**: Always wrap API calls in try-catch blocks
+5. **Timestamp Inconsistencies**: Use consistent datetime handling in tests and code
+6. **Using @transformer decorator**: Use extract() override method instead for production pipelines
+7. **Instantiating pipeline classes in helper functions**: Keep business logic in class methods or standalone functions
 
-#### Required SQL Standards
-- [ ] SQLFluff headers present
-- [ ] Lowercase keywords
-- [ ] Proper indentation (4 spaces)
-- [ ] Column alignment
-- [ ] No trailing whitespace
-
-#### Required YAML Standards
-- [ ] Consistent indentation (2 spaces)
-- [ ] Proper quoting for strings
-- [ ] No duplicate keys
-- [ ] Valid YAML syntax
-
-### IDE Configuration Recommendations
-
-#### VS Code Settings
-```json
-{
-    "python.linting.enabled": true,
-    "python.linting.flake8Enabled": true,
-    "python.formatting.provider": "black",
-    "python.formatting.blackArgs": ["--line-length=88"],
-    "python.sortImports.args": ["--profile", "black"],
-    "sqlfluff.dialect": "snowflake",
-    "sqlfluff.templater": "placeholder"
-}
-```
-
-#### Pre-commit Hooks Configuration
-Ensure your `.pre-commit-config.yaml` includes:
-```yaml
-repos:
-  - repo: https://github.com/psf/black
-    rev: 23.1.0
-    hooks:
-      - id: black
-        language_version: python3
-  - repo: https://github.com/pycqa/isort
-    rev: 5.12.0
-    hooks:
-      - id: isort
-        args: ["--profile", "black"]
-  - repo: https://github.com/pycqa/flake8
-    rev: 6.0.0
-    hooks:
-      - id: flake8
-        args: ["--max-line-length=88", "--extend-ignore=E203,W503"]
-  - repo: https://github.com/sqlfluff/sqlfluff
-    rev: 2.3.2
-    hooks:
-      - id: sqlfluff-fix
-        args: ["--dialect=snowflake", "--templater=placeholder"]
-```
-
-### Error Prevention Guidelines
-
-1. **Always run pre-commit checks before committing**
-2. **Use meaningful variable names that clearly indicate their purpose**
-3. **Remove debug code and temporary variables before committing**
-4. **Include SQLFluff headers in all new SQL files**
-5. **Test imports - if you import it, use it**
-6. **Follow the single responsibility principle for functions**
-
-This document serves as the definitive guide for ETIP pipeline development. All pipelines must adhere to these standards to ensure consistency, maintainability, and reliability across the platform.
+This document serves as the definitive guide for ETIP pipeline development. All pipelines must adhere to these production-ready standards to ensure consistency, maintainability, and reliability across the platform.

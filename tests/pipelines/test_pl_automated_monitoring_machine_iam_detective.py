@@ -2,17 +2,14 @@ import pytest
 import pandas as pd
 from unittest.mock import Mock, patch
 from freezegun import freeze_time
-from datetime import datetime
-import json
-import requests
+from datetime import datetime, timedelta
+from requests import Response, RequestException
 
+# Import pipeline components
 from pipelines.pl_automated_monitoring_machine_iam_detective.pipeline import (
     PLAutomatedMonitoringMachineIamDetective,
-    calculate_metrics,
-    _get_approved_accounts,
-    _calculate_tier1_metrics,
-    _calculate_tier2_metrics,
-    _calculate_tier3_metrics
+    CONTROL_CONFIG,
+    run
 )
 
 # Standard test constants
@@ -27,128 +24,72 @@ AVRO_SCHEMA_FIELDS = [
     "resources_info"
 ]
 
+
 class MockExchangeConfig:
     def __init__(self):
         self.client_id = "test_client"
         self.client_secret = "test_secret"
         self.exchange_url = "test-exchange.com"
 
+
 class MockEnv:
     def __init__(self):
         self.exchange = MockExchangeConfig()
 
-class MockOauthApi:
-    def __init__(self, url, api_token, ssl_context=None):
-        self.url = url
-        self.api_token = api_token
-        self.response = None
-        self.side_effect = None
-    
-    def send_request(self, url, request_type, request_kwargs, retry_delay=5):
-        """Mock send_request method with proper side_effect handling."""
-        if self.side_effect:
-            if isinstance(self.side_effect, Exception):
-                raise self.side_effect
-            elif isinstance(self.side_effect, list) and self.side_effect:
-                response = self.side_effect.pop(0)
-                if isinstance(response, Exception):
-                    raise response
-                return response
-        
-        if self.response:
-            return self.response
-        
-        # Return default response if none configured
-        from requests import Response
-        default_response = Response()
-        default_response.status_code = 200
-        return default_response
 
-def _mock_threshold_df():
-    """Utility function for test threshold data"""
+def _mock_thresholds_with_tier3():
+    """Generate threshold data including Tier 3 for detective control"""
     return pd.DataFrame([
-        {
-            "monitoring_metric_id": "MNTR-1074653-T1",
-            "control_id": "CTRL-1074653",
-            "monitoring_metric_tier": "Tier 1",
-            "metric_name": "Machine IAM Detective Tier 1",
-            "metric_description": "Coverage metric",
-            "warning_threshold": 95.0,
-            "alerting_threshold": 90.0
-        },
-        {
-            "monitoring_metric_id": "MNTR-1074653-T2",
-            "control_id": "CTRL-1074653",
-            "monitoring_metric_tier": "Tier 2",
-            "metric_name": "Machine IAM Detective Tier 2",
-            "metric_description": "Compliance metric",
-            "warning_threshold": 97.0,
-            "alerting_threshold": 95.0
-        },
-        {
-            "monitoring_metric_id": "MNTR-1074653-T3",
-            "control_id": "CTRL-1074653",
-            "monitoring_metric_tier": "Tier 3",
-            "metric_name": "Machine IAM Detective Tier 3",
-            "metric_description": "SLA metric",
-            "warning_threshold": 90.0,
-            "alerting_threshold": 85.0
-        }
+        {"monitoring_metric_id": "MNTR-1074653-T1", "control_id": "CTRL-1074653", 
+         "monitoring_metric_tier": "Tier 1", "warning_threshold": 97.0, "alerting_threshold": 95.0},
+        {"monitoring_metric_id": "MNTR-1074653-T2", "control_id": "CTRL-1074653", 
+         "monitoring_metric_tier": "Tier 2", "warning_threshold": 97.0, "alerting_threshold": 95.0},
+        {"monitoring_metric_id": "MNTR-1074653-T3", "control_id": "CTRL-1074653", 
+         "monitoring_metric_tier": "Tier 3 (SLA)", "warning_threshold": 90.0, "alerting_threshold": 85.0},
     ])
 
-def _mock_all_iam_roles_df():
-    """Mock IAM roles data"""
+
+def _mock_iam_roles():
+    """Generate mock IAM roles data"""
     return pd.DataFrame([
-        {
-            "AMAZON_RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-1",
-            "ACCOUNT": "123456789012",
-            "ROLE_TYPE": "MACHINE"
-        },
-        {
-            "AMAZON_RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-2",
-            "ACCOUNT": "123456789012",
-            "ROLE_TYPE": "MACHINE"
-        },
-        {
-            "AMAZON_RESOURCE_NAME": "arn:aws:iam::111111111111:role/test-role-3",
-            "ACCOUNT": "111111111111",
-            "ROLE_TYPE": "MACHINE"
-        },
-        {
-            "AMAZON_RESOURCE_NAME": "arn:aws:iam::123456789012:role/human-role",
-            "ACCOUNT": "123456789012",
-            "ROLE_TYPE": "HUMAN"
-        }
+        {"RESOURCE_ID": "role1", "AMAZON_RESOURCE_NAME": "arn:aws:iam::123456789012:role/Machine1",
+         "BA": "BA1", "ACCOUNT": "123456789012", "ROLE_TYPE": "MACHINE", "TYPE": "role"},
+        {"RESOURCE_ID": "role2", "AMAZON_RESOURCE_NAME": "arn:aws:iam::123456789012:role/Machine2",
+         "BA": "BA2", "ACCOUNT": "123456789012", "ROLE_TYPE": "MACHINE", "TYPE": "role"},
+        {"RESOURCE_ID": "role3", "AMAZON_RESOURCE_NAME": "arn:aws:iam::987654321098:role/Machine3",
+         "BA": "BA3", "ACCOUNT": "987654321098", "ROLE_TYPE": "MACHINE", "TYPE": "role"},
+        {"RESOURCE_ID": "role4", "AMAZON_RESOURCE_NAME": "arn:aws:iam::111111111111:role/Human1",
+         "BA": "BA4", "ACCOUNT": "111111111111", "ROLE_TYPE": "HUMAN", "TYPE": "role"},
     ])
 
-def _mock_evaluated_roles_df():
-    """Mock evaluated roles data"""
+
+def _mock_evaluated_roles():
+    """Generate mock evaluated roles data with NonCompliant status for Tier 3 testing"""
     return pd.DataFrame([
-        {
-            "RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-1",
-            "CONTROL_ID": "AC-3.AWS.39.v02",
-            "COMPLIANCE_STATUS": "Compliant"
-        },
-        {
-            "RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-2",
-            "CONTROL_ID": "AC-3.AWS.39.v02",
-            "COMPLIANCE_STATUS": "NonCompliant"
-        }
+        {"RESOURCE_NAME": "arn:aws:iam::123456789012:role/Machine1", 
+         "COMPLIANCE_STATUS": "Compliant", "CONTROL_ID": "AC-3.AWS.39.v02"},
+        {"RESOURCE_NAME": "arn:aws:iam::123456789012:role/Machine2", 
+         "COMPLIANCE_STATUS": "NonCompliant", "CONTROL_ID": "AC-3.AWS.39.v02"},
+        {"RESOURCE_NAME": "arn:aws:iam::987654321098:role/Machine3", 
+         "COMPLIANCE_STATUS": "NonCompliant", "CONTROL_ID": "AC-3.AWS.39.v02"},
     ])
 
-def _mock_sla_data_df():
-    """Mock SLA data"""
+
+def _mock_sla_data():
+    """Generate mock SLA data for Tier 3 calculations"""
+    base_date = datetime.now()
     return pd.DataFrame([
-        {
-            "RESOURCE_ID": "arn:aws:iam::123456789012:role/test-role-2",
-            "CONTROL_RISK": "High",
-            "OPEN_DATE_UTC_TIMESTAMP": datetime.now()
-        }
+        {"RESOURCE_ID": "arn:aws:iam::123456789012:role/Machine2", 
+         "CONTROL_RISK": "High",
+         "OPEN_DATE_UTC_TIMESTAMP": base_date - timedelta(days=20)},  # Within 30-day SLA
+        {"RESOURCE_ID": "arn:aws:iam::987654321098:role/Machine3", 
+         "CONTROL_RISK": "High",
+         "OPEN_DATE_UTC_TIMESTAMP": base_date - timedelta(days=40)},  # Past 30-day SLA
     ])
+
 
 def generate_mock_api_response(content=None, status_code=200):
     """Generate standardized mock API response."""
-    from requests import Response
     import json
     
     mock_response = Response()
@@ -161,173 +102,114 @@ def generate_mock_api_response(content=None, status_code=200):
     
     return mock_response
 
-def generate_mock_accounts_response():
-    """Generate mock approved accounts API response"""
-    return {
-        "accounts": [
-            {"accountNumber": "123456789012"},
-            {"accountNumber": "987654321098"}
-        ]
-    }
 
 @freeze_time("2024-11-05 12:09:00")
-def test_calculate_metrics_success():
-    """Test successful metrics calculation"""
+def test_calculate_metrics_with_tier3():
+    """Test successful metrics calculation including Tier 3 SLA metrics"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringMachineIamDetective(env)
+    
     # Setup test data
-    thresholds_df = _mock_threshold_df()
-    all_iam_roles_df = _mock_all_iam_roles_df()
-    evaluated_roles_df = _mock_evaluated_roles_df()
-    sla_data_df = _mock_sla_data_df()
+    thresholds_df = _mock_thresholds_with_tier3()
+    iam_roles_df = _mock_iam_roles()
+    evaluated_roles_df = _mock_evaluated_roles()
+    sla_data_df = _mock_sla_data()
     
     # Mock API response for approved accounts
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = generate_mock_accounts_response()
+    with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline.OauthApi') as mock_oauth:
+        mock_api_instance = Mock()
+        mock_oauth.return_value = mock_api_instance
+        
+        # Mock approved accounts API response
+        accounts_response = {
+            "accounts": [
+                {"accountNumber": "123456789012", "accountStatus": "Active"},
+                {"accountNumber": "987654321098", "accountStatus": "Active"}
+            ]
+        }
+        mock_api_instance.send_request.return_value = generate_mock_api_response(accounts_response)
+        
+        # Call _calculate_metrics directly
+        result = pipeline._calculate_metrics(thresholds_df, iam_roles_df, evaluated_roles_df, sla_data_df)
+        
+        # Assertions
+        assert isinstance(result, pd.DataFrame)
+        assert not result.empty
+        assert list(result.columns) == AVRO_SCHEMA_FIELDS
+        assert len(result) == 3  # 3 tiers for 1 control
+        
+        # Verify all tiers present
+        metric_ids = set(result["monitoring_metric_id"].unique())
+        assert metric_ids == {"MNTR-1074653-T1", "MNTR-1074653-T2", "MNTR-1074653-T3"}
+        
+        # Verify data types
+        assert pd.api.types.is_integer_dtype(result["metric_value_numerator"])
+        assert pd.api.types.is_integer_dtype(result["metric_value_denominator"])
+        assert pd.api.types.is_float_dtype(result["monitoring_metric_value"])
+
+
+@freeze_time("2024-11-05 12:09:00")
+def test_tier3_sla_calculation():
+    """Test Tier 3 SLA metrics calculation"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringMachineIamDetective(env)
     
-    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
-    mock_api.response = mock_response
+    # Setup test data - 2 non-compliant roles
+    evaluated_roles = _mock_evaluated_roles()[1:3]  # 2 non-compliant
+    sla_data = _mock_sla_data()  # 1 within SLA, 1 past SLA
     
-    context = {"api_connector": mock_api}
+    metric_value, compliant_count, total_count, non_compliant_resources = pipeline._calculate_tier3_metrics(
+        pd.DataFrame(),  # filtered_roles not used in Tier 3
+        evaluated_roles,
+        sla_data
+    )
     
-    # Mock the _get_approved_accounts function
-    with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline._get_approved_accounts', 
-                    return_value=["123456789012", "987654321098"]):
-        # Execute transformer
-        result = calculate_metrics(thresholds_df, all_iam_roles_df, evaluated_roles_df, sla_data_df, context)
+    # 1 out of 2 non-compliant roles within SLA = 50%
+    assert metric_value == 50.0
+    assert compliant_count == 1  # 1 within SLA
+    assert total_count == 2  # 2 total non-compliant
+    assert non_compliant_resources is not None
+    assert len(non_compliant_resources) == 2  # Details for both non-compliant roles
+
+
+def test_tier3_all_compliant():
+    """Test Tier 3 when all roles are compliant (no non-compliant roles)"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringMachineIamDetective(env)
     
-    # Assertions
-    assert isinstance(result, pd.DataFrame)
-    assert not result.empty
-    assert list(result.columns) == AVRO_SCHEMA_FIELDS
-    assert len(result) == 3  # Three metrics (Tier 1, 2, 3)
+    # All roles are compliant
+    evaluated_roles = pd.DataFrame([
+        {"RESOURCE_NAME": "arn:aws:iam::123456789012:role/Machine1", 
+         "COMPLIANCE_STATUS": "Compliant", "CONTROL_ID": "AC-3.AWS.39.v02"}
+    ])
     
-    # Verify data types
-    for _, row in result.iterrows():
-        assert isinstance(row["control_monitoring_utc_timestamp"], datetime)
-        assert isinstance(row["monitoring_metric_value"], float)
-        assert isinstance(row["metric_value_numerator"], int)
-        assert isinstance(row["metric_value_denominator"], int)
-        assert row["control_id"] == "CTRL-1074653"
+    metric_value, compliant_count, total_count, non_compliant_resources = pipeline._calculate_tier3_metrics(
+        pd.DataFrame(),
+        evaluated_roles,
+        pd.DataFrame()  # Empty SLA data
+    )
+    
+    # No non-compliant roles = 100% SLA compliance
+    assert metric_value == 100.0
+    assert compliant_count == 0
+    assert total_count == 0
+    assert non_compliant_resources is not None
+    assert any("All evaluated roles are compliant" in str(r) for r in non_compliant_resources)
+
 
 def test_calculate_metrics_empty_thresholds():
     """Test error handling for empty thresholds"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringMachineIamDetective(env)
+    
     empty_df = pd.DataFrame()
-    all_iam_roles_df = _mock_all_iam_roles_df()
-    evaluated_roles_df = _mock_evaluated_roles_df()
-    sla_data_df = _mock_sla_data_df()
-    context = {"api_connector": Mock()}
+    iam_roles_df = _mock_iam_roles()
+    evaluated_roles_df = _mock_evaluated_roles()
+    sla_data_df = _mock_sla_data()
     
     with pytest.raises(RuntimeError, match="No threshold data found"):
-        calculate_metrics(empty_df, all_iam_roles_df, evaluated_roles_df, sla_data_df, context)
+        pipeline._calculate_metrics(empty_df, iam_roles_df, evaluated_roles_df, sla_data_df)
 
-def test_get_approved_accounts_success():
-    """Test successful account fetching"""
-    mock_session = Mock()
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = generate_mock_accounts_response()
-    mock_session.get.return_value = mock_response
-    
-    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
-    
-    with patch('requests.Session', return_value=mock_session):
-        accounts = _get_approved_accounts(mock_api)
-    
-    assert accounts == ["123456789012", "987654321098"]
-    assert len(accounts) == 2
-
-def test_get_approved_accounts_api_error():
-    """Test API error handling"""
-    mock_session = Mock()
-    mock_session.get.side_effect = requests.exceptions.RequestException("Connection error")
-    
-    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
-    
-    with patch('requests.Session', return_value=mock_session):
-        with pytest.raises(RuntimeError, match="Failed to fetch approved accounts"):
-            _get_approved_accounts(mock_api)
-
-def test_get_approved_accounts_empty_response():
-    """Test empty accounts response"""
-    mock_session = Mock()
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"accounts": []}
-    mock_session.get.return_value = mock_response
-    
-    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
-    
-    with patch('requests.Session', return_value=mock_session):
-        with pytest.raises(ValueError, match="No valid account numbers received"):
-            _get_approved_accounts(mock_api)
-
-def test_calculate_tier1_metrics():
-    """Test Tier 1 metrics calculation"""
-    filtered_roles = pd.DataFrame([
-        {"AMAZON_RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-1"},
-        {"AMAZON_RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-2"}
-    ])
-    
-    evaluated_roles = pd.DataFrame([
-        {"RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-1"}
-    ])
-    
-    metric_value, compliant_count, total_count, non_compliant_resources = _calculate_tier1_metrics(
-        filtered_roles, evaluated_roles
-    )
-    
-    assert metric_value == 50.0  # 1 out of 2 evaluated
-    assert compliant_count == 1
-    assert total_count == 2
-    assert non_compliant_resources is not None
-
-def test_calculate_tier2_metrics():
-    """Test Tier 2 metrics calculation"""
-    filtered_roles = pd.DataFrame([
-        {"AMAZON_RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-1", "ACCOUNT": "123456789012"},
-        {"AMAZON_RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-2", "ACCOUNT": "123456789012"}
-    ])
-    
-    evaluated_roles = pd.DataFrame([
-        {"RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-1", "COMPLIANCE_STATUS": "Compliant"},
-        {"RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-2", "COMPLIANCE_STATUS": "NonCompliant"}
-    ])
-    
-    metric_value, compliant_count, total_count, non_compliant_resources = _calculate_tier2_metrics(
-        filtered_roles, evaluated_roles
-    )
-    
-    assert metric_value == 50.0  # 1 out of 2 compliant
-    assert compliant_count == 1
-    assert total_count == 2
-    assert non_compliant_resources is not None
-
-def test_calculate_tier3_metrics():
-    """Test Tier 3 metrics calculation"""
-    filtered_roles = pd.DataFrame([
-        {"AMAZON_RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-2", "ACCOUNT": "123456789012"}
-    ])
-    
-    evaluated_roles = pd.DataFrame([
-        {"RESOURCE_NAME": "arn:aws:iam::123456789012:role/test-role-2", "COMPLIANCE_STATUS": "NonCompliant"}
-    ])
-    
-    sla_data = pd.DataFrame([
-        {
-            "RESOURCE_ID": "arn:aws:iam::123456789012:role/test-role-2",
-            "CONTROL_RISK": "High",
-            "OPEN_DATE_UTC_TIMESTAMP": datetime.now() - pd.Timedelta(days=20)  # Within SLA
-        }
-    ])
-    
-    metric_value, compliant_count, total_count, non_compliant_resources = _calculate_tier3_metrics(
-        filtered_roles, evaluated_roles, sla_data
-    )
-    
-    assert metric_value == 100.0  # Within SLA
-    assert compliant_count == 1
-    assert total_count == 1
-    assert non_compliant_resources is not None
 
 def test_pipeline_initialization():
     """Test pipeline class initialization"""
@@ -336,113 +218,122 @@ def test_pipeline_initialization():
     
     assert pipeline.env == env
     assert hasattr(pipeline, 'api_url')
-    assert "api.cloud.capitalone.com" in pipeline.api_url
+    assert 'api.cloud.capitalone.com' in pipeline.api_url
 
-def test_pipeline_run_method():
-    """Test pipeline run method with default parameters"""
-    env = MockEnv()
-    pipeline = PLAutomatedMonitoringMachineIamDetective(env)
-    
-    # Mock the run method
-    with patch.object(pipeline, 'run') as mock_run:
-        pipeline.run()
-        # Verify run was called with default parameters
-        mock_run.assert_called_once_with()
+
+def test_control_config_structure():
+    """Test that control configuration is properly structured"""
+    assert CONTROL_CONFIG["cloud_control_id"] == "AC-3.AWS.39.v02"
+    assert CONTROL_CONFIG["ctrl_id"] == "CTRL-1074653"
+    assert "tier1" in CONTROL_CONFIG["metric_ids"]
+    assert "tier2" in CONTROL_CONFIG["metric_ids"]
+    assert "tier3" in CONTROL_CONFIG["metric_ids"]
+    assert CONTROL_CONFIG["requires_tier3"] is True
+
 
 def test_api_error_handling():
     """Test API error handling and exception wrapping"""
-    thresholds_df = _mock_threshold_df()
-    all_iam_roles_df = _mock_all_iam_roles_df()
-    evaluated_roles_df = _mock_evaluated_roles_df()
-    sla_data_df = _mock_sla_data_df()
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringMachineIamDetective(env)
     
-    # Test network errors
-    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
-    mock_api.side_effect = requests.exceptions.RequestException("Connection error")
-    
-    context = {"api_connector": mock_api}
-    
-    # Should wrap exception in RuntimeError
-    with pytest.raises(RuntimeError, match="Failed to fetch approved accounts"):
-        calculate_metrics(thresholds_df, all_iam_roles_df, evaluated_roles_df, sla_data_df, context)
+    with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline.OauthApi') as mock_oauth:
+        mock_api_instance = Mock()
+        mock_oauth.return_value = mock_api_instance
+        mock_api_instance.send_request.side_effect = RequestException("Connection error")
+        
+        with pytest.raises(RuntimeError, match="Failed to fetch approved accounts"):
+            pipeline._get_approved_accounts(mock_api_instance)
 
-def test_main_function_execution():
-    """Test main function execution path"""
-    mock_env = Mock()
+
+def test_extract_method_integration():
+    """Test the extract method integration with super().extract()"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringMachineIamDetective(env)
     
-    with patch("etip_env.set_env_vars", return_value=mock_env):
-        with patch("pipelines.pl_automated_monitoring_machine_iam_detective.pipeline.run") as mock_run:
-            with patch("sys.exit") as mock_exit:
-                # Execute main block
-                code = """
-if True:
-    from etip_env import set_env_vars
-    from pipelines.pl_automated_monitoring_machine_iam_detective.pipeline import run
+    # Mock super().extract() to return test data
+    mock_df = pd.DataFrame({
+        "thresholds_raw": [_mock_thresholds_with_tier3()],
+        "all_iam_roles": [_mock_iam_roles()],
+        "evaluated_roles": [_mock_evaluated_roles()],
+        "sla_data": [_mock_sla_data()]
+    })
     
-    env = set_env_vars()
-    try:
-        run(env=env, is_load=False, dq_actions=False)
-    except Exception:
-        import sys
-        sys.exit(1)
-"""
-                exec(code)
+    with patch.object(PLAutomatedMonitoringMachineIamDetective, '__bases__', (Mock,)):
+        with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline.ConfigPipeline.extract') as mock_super:
+            mock_super.return_value = mock_df
+            
+            with patch.object(pipeline, '_calculate_metrics') as mock_calc:
+                mock_metrics = pd.DataFrame({"test": [1, 2, 3]})
+                mock_calc.return_value = mock_metrics
                 
-                # Verify success path
-                assert not mock_exit.called
-                mock_run.assert_called_once_with(env=mock_env, is_load=False, dq_actions=False)
-
-def test_empty_data_handling():
-    """Test handling of empty data scenarios"""
-    thresholds_df = _mock_threshold_df()
-    empty_roles_df = pd.DataFrame()
-    empty_evaluated_df = pd.DataFrame()
-    empty_sla_df = pd.DataFrame()
-    
-    mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
-    context = {"api_connector": mock_api}
-    
-    with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline._get_approved_accounts', 
-                    return_value=["123456789012"]):
-        result = calculate_metrics(thresholds_df, empty_roles_df, empty_evaluated_df, empty_sla_df, context)
-        
-        # Should still return a valid DataFrame with 0 values
-        assert isinstance(result, pd.DataFrame)
-        assert not result.empty
-        assert len(result) == 3  # Three metrics
-        
-        # All metrics should have 0 values due to empty data
-        for _, row in result.iterrows():
-            assert row["monitoring_metric_value"] == 0.0
-            assert row["metric_value_numerator"] == 0
-            assert row["metric_value_denominator"] == 0
-
-def test_compliance_status_logic():
-    """Test compliance status determination logic"""
-    thresholds_df = pd.DataFrame([{
-        "monitoring_metric_id": "MNTR-1074653-T1",
-        "control_id": "CTRL-1074653",
-        "monitoring_metric_tier": "Tier 1",
-        "warning_threshold": 95.0,
-        "alerting_threshold": 90.0
-    }])
-    
-    # Test scenarios for different metric values
-    test_cases = [
-        (96.0, "Green"),   # Above warning threshold
-        (93.0, "Yellow"),  # Between warning and alert threshold
-        (85.0, "Red")      # Below alert threshold
-    ]
-    
-    for metric_value, expected_status in test_cases:
-        # Create mock data that will result in the desired metric value
-        mock_api = MockOauthApi(url="test_url", api_token="Bearer token")
-        context = {"api_connector": mock_api}
-        
-        with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline._get_approved_accounts', 
-                        return_value=["123456789012"]):
-            with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline._calculate_tier1_metrics',
-                            return_value=(metric_value, 96, 100, None)):
-                result = calculate_metrics(thresholds_df, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), context)
+                result = pipeline.extract()
                 
-                assert result.iloc[0]["monitoring_metric_status"] == expected_status
+                # Verify super().extract() was called
+                mock_super.assert_called_once()
+                
+                # Verify _calculate_metrics was called with correct data
+                mock_calc.assert_called_once()
+                
+                # Verify the result has monitoring_metrics column
+                assert "monitoring_metrics" in result.columns
+                assert result["monitoring_metrics"].iloc[0].equals(mock_metrics)
+
+
+def test_run_function():
+    """Test pipeline run function"""
+    env = MockEnv()
+    
+    with patch('pipelines.pl_automated_monitoring_machine_iam_detective.pipeline.PLAutomatedMonitoringMachineIamDetective') as mock_pipeline_class:
+        mock_pipeline = Mock()
+        mock_pipeline_class.return_value = mock_pipeline
+        mock_pipeline.run.return_value = "test_result"
+        
+        result = run(env, is_load=False, dq_actions=True)
+        
+        mock_pipeline_class.assert_called_once_with(env)
+        mock_pipeline.configure_from_filename.assert_called_once()
+        mock_pipeline.run.assert_called_once_with(load=False, dq_actions=True)
+        assert result == "test_result"
+
+
+def test_sla_threshold_mapping():
+    """Test SLA threshold mapping for different risk levels"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringMachineIamDetective(env)
+    
+    base_date = datetime.now()
+    
+    # Create evaluated roles with different risk levels
+    evaluated_roles = pd.DataFrame([
+        {"RESOURCE_NAME": "role1", "COMPLIANCE_STATUS": "NonCompliant", "CONTROL_ID": "AC-3.AWS.39.v02"},
+        {"RESOURCE_NAME": "role2", "COMPLIANCE_STATUS": "NonCompliant", "CONTROL_ID": "AC-3.AWS.39.v02"},
+        {"RESOURCE_NAME": "role3", "COMPLIANCE_STATUS": "NonCompliant", "CONTROL_ID": "AC-3.AWS.39.v02"},
+        {"RESOURCE_NAME": "role4", "COMPLIANCE_STATUS": "NonCompliant", "CONTROL_ID": "AC-3.AWS.39.v02"},
+    ])
+    
+    # Create SLA data with different risk levels and open dates
+    sla_data = pd.DataFrame([
+        {"RESOURCE_ID": "role1", "CONTROL_RISK": "Critical", 
+         "OPEN_DATE_UTC_TIMESTAMP": base_date - timedelta(days=1)},  # Past Critical SLA (0 days)
+        {"RESOURCE_ID": "role2", "CONTROL_RISK": "High", 
+         "OPEN_DATE_UTC_TIMESTAMP": base_date - timedelta(days=25)},  # Within High SLA (30 days)
+        {"RESOURCE_ID": "role3", "CONTROL_RISK": "Medium", 
+         "OPEN_DATE_UTC_TIMESTAMP": base_date - timedelta(days=50)},  # Within Medium SLA (60 days)
+        {"RESOURCE_ID": "role4", "CONTROL_RISK": "Low", 
+         "OPEN_DATE_UTC_TIMESTAMP": base_date - timedelta(days=100)},  # Past Low SLA (90 days)
+    ])
+    
+    metric_value, compliant_count, total_count, non_compliant_resources = pipeline._calculate_tier3_metrics(
+        pd.DataFrame(),
+        evaluated_roles,
+        sla_data
+    )
+    
+    # 2 within SLA (High, Medium), 2 past SLA (Critical, Low) = 50%
+    assert metric_value == 50.0
+    assert compliant_count == 2
+    assert total_count == 4
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

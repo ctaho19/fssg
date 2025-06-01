@@ -52,6 +52,23 @@ environments:
 
   local: *nonprod_config
 
+stages:
+  - name: ingress_validation
+    description: "Validate data quality of input datasets"
+    envs: [qa, prod, local]
+  - name: extract
+    description: "Extract data from Snowflake and external APIs"
+    envs: [qa, prod, local]
+  - name: transform
+    description: "Calculate Machine IAM preventative control metrics"
+    envs: [qa, prod, local]
+  - name: egress_validation
+    description: "Validate transformed metrics before loading"
+    envs: [qa, prod, local]
+  - name: load
+    description: "Load metrics to OneStream"
+    envs: [qa, prod, local]
+
 # REQUIRED: Comprehensive Data Quality Validation
 ingress_validation:
   thresholds_raw:
