@@ -284,32 +284,41 @@ def test_api_error_handling():
 
 
 def test_extract_method_integration():
-    """Test the extract method integration with super().extract()"""
+    """Test the extract method integration with super().extract() and .iloc[0] fix"""
     env = MockEnv()
     pipeline = PLAutomatedMonitoringCloudradarControls(env)
     
-    # Mock super().extract() to return thresholds data
-    mock_df = pd.DataFrame({"thresholds_raw": [_mock_multi_control_thresholds()]})
+    # Mock super().extract() to return thresholds data (as Series containing DataFrame)
+    mock_thresholds = _mock_multi_control_thresholds()
+    mock_df = pd.DataFrame({"thresholds_raw": [mock_thresholds]})
     
     with patch.object(PLAutomatedMonitoringCloudradarControls, '__bases__', (Mock,)):
         with patch('pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.ConfigPipeline.extract') as mock_super:
             mock_super.return_value = mock_df
             
-            with patch.object(pipeline, '_calculate_metrics') as mock_calc:
-                mock_metrics = pd.DataFrame({"test": [1, 2, 3]})
-                mock_calc.return_value = mock_metrics
+            # Mock API calls to avoid actual network requests
+            with patch('pipelines.pl_automated_monitoring_cloudradar_controls.pipeline.OauthApi') as mock_oauth:
+                mock_api_instance = Mock()
+                mock_oauth.return_value = mock_api_instance
+                mock_api_instance.send_request.return_value = generate_mock_api_response({
+                    "resourceConfigurations": [], "nextRecordKey": None
+                })
                 
                 result = pipeline.extract()
                 
                 # Verify super().extract() was called
                 mock_super.assert_called_once()
                 
-                # Verify _calculate_metrics was called with correct data
-                mock_calc.assert_called_once()
-                
                 # Verify the result has monitoring_metrics column
                 assert "monitoring_metrics" in result.columns
-                assert result["monitoring_metrics"].iloc[0].equals(mock_metrics)
+                
+                # Verify that the monitoring_metrics contains a DataFrame
+                metrics_df = result["monitoring_metrics"].iloc[0]
+                assert isinstance(metrics_df, pd.DataFrame)
+                
+                # Verify the DataFrame has the correct schema
+                if not metrics_df.empty:
+                    assert list(metrics_df.columns) == AVRO_SCHEMA_FIELDS
 
 
 def test_run_function():

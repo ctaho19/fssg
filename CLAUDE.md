@@ -578,34 +578,42 @@ def test_pipeline_initialization():
     assert 'test-exchange.com' in pipeline.api_url
 
 def test_extract_method_integration():
-    """Test the extract method integration with super().extract()"""
+    """Test the extract method integration with super().extract() and .iloc[0] fix"""
     env = MockEnv()
     pipeline = PLAutomatedMonitoring[ControlName](env)
     
-    # Mock super().extract() to return test data
-    mock_df = pd.DataFrame({
-        "thresholds_raw": [_mock_threshold_df()]
-    })
+    # Mock super().extract() to return test data (as Series containing DataFrames)
+    mock_thresholds = _mock_threshold_df()
+    mock_df = pd.DataFrame({"thresholds_raw": [mock_thresholds]})
     
     with patch.object(PLAutomatedMonitoring[ControlName], '__bases__', (Mock,)):
         with patch('pipelines.pl_automated_monitoring_[CONTROL_ID].pipeline.ConfigPipeline.extract') as mock_super:
             mock_super.return_value = mock_df
             
-            with patch.object(pipeline, '_calculate_metrics') as mock_calc:
-                mock_metrics = pd.DataFrame({"test": [1, 2, 3]})
-                mock_calc.return_value = mock_metrics
+            # Mock API calls to avoid actual network requests
+            with patch('pipelines.pl_automated_monitoring_[CONTROL_ID].pipeline.OauthApi') as mock_oauth:
+                mock_api_instance = Mock()
+                mock_oauth.return_value = mock_api_instance
+                mock_api_instance.send_request.return_value = generate_mock_api_response({
+                    "resources": [{"id": "resource1", "compliant": True}],
+                    "nextRecordKey": None
+                })
                 
                 result = pipeline.extract()
                 
                 # Verify super().extract() was called
                 mock_super.assert_called_once()
                 
-                # Verify _calculate_metrics was called with correct data
-                mock_calc.assert_called_once()
-                
                 # Verify the result has monitoring_metrics column
                 assert "monitoring_metrics" in result.columns
-                assert result["monitoring_metrics"].iloc[0].equals(mock_metrics)
+                
+                # Verify that the monitoring_metrics contains a DataFrame
+                metrics_df = result["monitoring_metrics"].iloc[0]
+                assert isinstance(metrics_df, pd.DataFrame)
+                
+                # Verify the DataFrame has the correct schema
+                if not metrics_df.empty:
+                    assert list(metrics_df.columns) == AVRO_SCHEMA_FIELDS
 
 def test_api_error_handling():
     """Test API error handling and exception wrapping"""
@@ -869,6 +877,75 @@ def calculate_metrics(thresholds_raw, context):
         # Process threshold
         pass
     return pd.DataFrame(results)
+```
+
+#### Critical Code Review Issues to Prevent
+
+**Missing Required Imports**
+```python
+# ❌ BAD - Missing ssl import when using ssl.create_default_context()
+import json
+from datetime import datetime
+# ssl module missing but used in _get_api_connector()
+
+# ✅ GOOD - Include all required imports
+import json
+import ssl
+from datetime import datetime
+from pathlib import Path
+```
+
+**Inverted Threshold Logic**
+```python
+# ❌ BAD - Yellow status is unreachable due to inverted logic
+if metric_value >= alert_threshold:      # 95.0
+    compliance_status = "Green"
+elif metric_value >= warning_threshold:  # 97.0 - Never reached!
+    compliance_status = "Yellow"
+else:
+    compliance_status = "Red"
+
+# ✅ GOOD - Correct threshold order (higher threshold first)
+if warning_threshold is not None and metric_value >= warning_threshold:  # 97.0
+    compliance_status = "Green"
+elif metric_value >= alert_threshold:  # 95.0
+    compliance_status = "Yellow"
+else:
+    compliance_status = "Red"
+```
+
+**Series vs DataFrame Parameter Errors**
+```python
+# ❌ BAD - Passing Series instead of DataFrame
+def extract(self) -> pd.DataFrame:
+    df = super().extract()
+    # df["thresholds_raw"] is a Series, not a DataFrame
+    df["monitoring_metrics"] = self._calculate_metrics(df["thresholds_raw"])
+    return df
+
+# ✅ GOOD - Extract DataFrame from Series using iloc[0]
+def extract(self) -> pd.DataFrame:
+    df = super().extract()
+    df["monitoring_metrics"] = self._calculate_metrics(df["thresholds_raw"].iloc[0])
+    return df
+```
+
+**Duplicate OAuth Token Creation**
+```python
+# ❌ BAD - Creating new OAuth connector instead of using existing method
+def _fetch_api_resources(self, resource_type: str):
+    api_connector = OauthApi(
+        url=self.api_url,
+        api_token=refresh(  # Duplicate token refresh
+            client_id=self.env.exchange.client_id,
+            client_secret=self.env.exchange.client_secret,
+            exchange_url=self.env.exchange.exchange_url,
+        ),
+    )
+
+# ✅ GOOD - Reuse existing _get_api_connector() method
+def _fetch_api_resources(self, resource_type: str):
+    api_connector = self._get_api_connector()
 ```
 
 ### Mandatory Validations
