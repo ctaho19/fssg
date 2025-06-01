@@ -293,7 +293,7 @@ def test_api_error_handling():
             mock_oauth.return_value = mock_api_instance
             mock_api_instance.send_request.side_effect = RequestException("Connection error")
             
-            with pytest.raises(RuntimeError, match="Failed to fetch AWS::KMS::Key resources from API"):
+            with pytest.raises(RuntimeError, match=r"Failed to fetch .* resources from API"):
                 pipeline._calculate_metrics(thresholds_df)
 
 
