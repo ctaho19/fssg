@@ -19,7 +19,6 @@ from typing import Dict, List
 import pandas as pd
 from datetime import datetime
 import json
-import ssl
 from pathlib import Path
 from config_pipeline import ConfigPipeline
 from connectors.api import OauthApi
@@ -42,15 +41,9 @@ class PLAutomatedMonitoring[ControlName](ConfigPipeline):
             exchange_url=self.env.exchange.exchange_url,
         )
         
-        # Create SSL context if certificate file exists
-        ssl_context = None
-        if C1_CERT_FILE:
-            ssl_context = ssl.create_default_context(cafile=C1_CERT_FILE)
-        
         return OauthApi(
             url=self.api_url,
-            api_token=f"Bearer {api_token}",
-            ssl_context=ssl_context
+            api_token=f"Bearer {api_token}"
         )
     
     def extract(self) -> pd.DataFrame:
@@ -710,13 +703,13 @@ class PLAutomatedMonitoringMultiControl(ConfigPipeline):
 2. **Bearer Token Format**: Format as `f"Bearer {api_token}"`
 3. **Environment-Aware URLs**: Construct URLs using `self.env.exchange.exchange_url`
 4. **Standard Headers**: Use `"application/json;v=1"` (not `v=1.0`)
-5. **SSL Certificates**: Implement `C1_CERT_FILE` for secure connections
+5. **SSL Certificates**: Pass `C1_CERT_FILE` in the `verify` parameter of request_kwargs, not as ssl_context to OauthApi
 6. **Pagination Handling**: Process `nextRecordKey` for large result sets
 7. **Error Wrapping**: Wrap API exceptions in `RuntimeError` with descriptive context
 8. **Use send_request method**: Always use the `send_request` method from OauthApi for proper error handling and retries
 9. **Empty URL for relative paths**: When the full URL is in the connector, pass empty string to send_request
 10. **Proper parameter naming**: Use `retry_count` (not `max_retries`) for consistency
-11. **Certificate handling**: Always include SSL certificate verification when available
+11. **Certificate handling**: Pass certificate file via `verify` parameter in request_kwargs
 
 ### Data Processing Standards
 
@@ -899,16 +892,41 @@ def calculate_metrics(thresholds_raw, context):
 
 **Missing Required Imports**
 ```python
-# ❌ BAD - Missing ssl import when using ssl.create_default_context()
+# ❌ BAD - Missing Path import when using Path(__file__)
 import json
 from datetime import datetime
-# ssl module missing but used in _get_api_connector()
+# Path module missing but used in run function
 
 # ✅ GOOD - Include all required imports
 import json
-import ssl
 from datetime import datetime
 from pathlib import Path
+```
+
+**Invalid OauthApi Parameters**
+```python
+# ❌ BAD - OauthApi doesn't accept ssl_context parameter
+ssl_context = ssl.create_default_context(cafile=C1_CERT_FILE)
+return OauthApi(
+    url=self.api_url,
+    api_token=f"Bearer {api_token}",
+    ssl_context=ssl_context  # TypeError: unexpected keyword argument
+)
+
+# ✅ GOOD - Pass certificate file via verify parameter in send_request
+return OauthApi(
+    url=self.api_url,
+    api_token=f"Bearer {api_token}"
+)
+# Then in send_request:
+response = api_connector.send_request(
+    url=api_connector.url,
+    request_type="post",
+    request_kwargs={
+        "verify": C1_CERT_FILE,  # SSL certificate verification here
+        # other parameters...
+    }
+)
 ```
 
 **Inverted Threshold Logic**

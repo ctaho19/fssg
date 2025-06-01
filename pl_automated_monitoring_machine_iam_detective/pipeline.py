@@ -1,5 +1,4 @@
 import json
-import ssl
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List
@@ -45,15 +44,9 @@ class PLAutomatedMonitoringMachineIamDetective(ConfigPipeline):
             exchange_url=self.env.exchange.exchange_url,
         )
         
-        # Create SSL context if certificate file exists
-        ssl_context = None
-        if C1_CERT_FILE:
-            ssl_context = ssl.create_default_context(cafile=C1_CERT_FILE)
-        
         return OauthApi(
             url=self.api_url,
-            api_token=f"Bearer {api_token}",
-            ssl_context=ssl_context
+            api_token=f"Bearer {api_token}"
         )
 
     def _calculate_metrics(
