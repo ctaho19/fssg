@@ -59,7 +59,8 @@ class PLAutomatedMonitoring[ControlName](ConfigPipeline):
         df = super().extract()
         
         # Then enrich with API data using class methods
-        df["monitoring_metrics"] = self._calculate_metrics(df["thresholds_raw"])
+        # Wrap the DataFrame in a list to store it as a single value in the cell
+        df["monitoring_metrics"] = [self._calculate_metrics(df["thresholds_raw"].iloc[0])]
         return df
     
     def _calculate_metrics(self, thresholds_raw: pd.DataFrame) -> pd.DataFrame:
@@ -938,10 +939,18 @@ def extract(self) -> pd.DataFrame:
     df["monitoring_metrics"] = self._calculate_metrics(df["thresholds_raw"])
     return df
 
-# ✅ GOOD - Extract DataFrame from Series using iloc[0]
+# ❌ ALSO BAD - Trying to assign multi-column DataFrame to single column
 def extract(self) -> pd.DataFrame:
     df = super().extract()
+    # This causes ValueError: Cannot set a DataFrame with multiple columns to the single column
     df["monitoring_metrics"] = self._calculate_metrics(df["thresholds_raw"].iloc[0])
+    return df
+
+# ✅ GOOD - Extract DataFrame from Series using iloc[0] and wrap result in list
+def extract(self) -> pd.DataFrame:
+    df = super().extract()
+    # Must wrap the result DataFrame in a list to store it as a single value
+    df["monitoring_metrics"] = [self._calculate_metrics(df["thresholds_raw"].iloc[0])]
     return df
 ```
 
