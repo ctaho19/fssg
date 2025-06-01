@@ -1,4 +1,5 @@
 import json
+import ssl
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -154,14 +155,7 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
 
     def _fetch_cloudradar_resources(self, resource_type: str) -> List[Dict]:
         """Fetch resources from CloudRadar API for a specific resource type"""
-        api_connector = OauthApi(
-            url=self.api_url,
-            api_token=refresh(
-                client_id=self.env.exchange.client_id,
-                client_secret=self.env.exchange.client_secret,
-                exchange_url=self.env.exchange.exchange_url,
-            ),
-        )
+        api_connector = self._get_api_connector()
         
         headers = {
             "Accept": "application/json;v=1",
@@ -383,13 +377,10 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
             alert_threshold = threshold.get("alerting_threshold", 95.0)
             warning_threshold = threshold.get("warning_threshold", 97.0)
             
-            if compliance_percentage >= alert_threshold:
+            if warning_threshold is not None and compliance_percentage >= warning_threshold:
                 compliance_status = "Green"
-            elif warning_threshold is not None:
-                if compliance_percentage >= warning_threshold:
-                    compliance_status = "Yellow"
-                else:
-                    compliance_status = "Red"
+            elif compliance_percentage >= alert_threshold:
+                compliance_status = "Yellow"
             else:
                 compliance_status = "Red"
             
@@ -415,7 +406,7 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
     # This is the extract portion for the API
     def extract(self) -> pd.DataFrame:
         df = super().extract()
-        df["monitoring_metrics"] = self._calculate_metrics(df["thresholds_raw"])
+        df["monitoring_metrics"] = self._calculate_metrics(df["thresholds_raw"].iloc[0])
         return df
 
 

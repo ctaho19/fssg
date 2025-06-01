@@ -20,6 +20,7 @@ import pandas as pd
 from datetime import datetime
 import json
 import ssl
+from pathlib import Path
 from config_pipeline import ConfigPipeline
 from connectors.api import OauthApi
 from connectors.ca_certs import C1_CERT_FILE
