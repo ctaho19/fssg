@@ -370,9 +370,9 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
             alert_threshold = threshold.get("alerting_threshold", 95.0)
             warning_threshold = threshold.get("warning_threshold", 97.0)
             
-            if warning_threshold is not None and compliance_percentage >= warning_threshold:
+            if compliance_percentage >= alert_threshold:
                 compliance_status = "Green"
-            elif compliance_percentage >= alert_threshold:
+            elif warning_threshold is not None and compliance_percentage >= warning_threshold:
                 compliance_status = "Yellow"
             else:
                 compliance_status = "Red"
