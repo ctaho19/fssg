@@ -31,18 +31,18 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
         macie_testing: pd.DataFrame,
         historical_stats: pd.DataFrame,
     ) -> pd.DataFrame:
-    """
-    Core business logic transformer for Macie monitoring compliance metrics
-    
-    Args:
-        thresholds_raw: DataFrame containing metric thresholds from SQL query
-        macie_metrics: DataFrame containing Macie metrics data
-        macie_testing: DataFrame containing Macie test results
-        historical_stats: DataFrame containing historical test statistics
-        context: Pipeline context
+        """
+        Core business logic transformer for Macie monitoring compliance metrics
         
-    Returns:
-        DataFrame with standardized output schema
+        Args:
+            thresholds_raw: DataFrame containing metric thresholds from SQL query
+            macie_metrics: DataFrame containing Macie metrics data
+            macie_testing: DataFrame containing Macie test results
+            historical_stats: DataFrame containing historical test statistics
+            context: Pipeline context
+            
+        Returns:
+            DataFrame with standardized output schema
         """
         
         # Step 1: Input Validation (REQUIRED)

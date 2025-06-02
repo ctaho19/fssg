@@ -7,7 +7,7 @@ import json
 from config_pipeline import ConfigPipeline
 
 # Import pipeline components
-from pl_automated_monitoring_CTRL_1079134.pipeline import (
+from pipelines.pl_automated_monitoring_CTRL_1079134.pipeline import (
     PLAutomatedMonitoringCTRL1079134,
     run
 )
