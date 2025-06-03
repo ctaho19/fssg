@@ -257,7 +257,7 @@ def test_extract_method_compliance_status_logic():
     # Test scenarios for different metric values
     test_cases = [
         (100.0, 100.0, 100.0, "Green"),   # Perfect score
-        (98.0, 95.0, 97.0, "Yellow"),     # Between warning and alert
+        (96.0, 95.0, 97.0, "Yellow"),     # Between alert and warning (95 < 96 < 97)
         (90.0, 95.0, 97.0, "Red")         # Below alert threshold
     ]
     
