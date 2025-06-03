@@ -87,12 +87,12 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
             alert_threshold = threshold.get("alerting_threshold", 100.0)
             warning_threshold = threshold.get("warning_threshold")
             
-            if warning_threshold is not None and metric_value >= warning_threshold:
-                compliance_status = "Green"
-            elif metric_value >= alert_threshold:
+            if metric_value < alert_threshold:
+                compliance_status = "Red"
+            elif warning_threshold is not None and metric_value < warning_threshold:
                 compliance_status = "Yellow"
             else:
-                compliance_status = "Red"
+                compliance_status = "Green"
             
             # Step 4: Format Output with Standard Fields
             result = {
