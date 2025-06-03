@@ -1,9 +1,10 @@
 import json
 from datetime import datetime
-from pathlib import Path
 import pandas as pd
+
 from config_pipeline import ConfigPipeline
 from etip_env import Env
+
 
 def run(
     env: Env,
@@ -19,6 +20,7 @@ def run(
     else:
         return pipeline.run(load=is_load, dq_actions=dq_actions)
 
+
 class PLAutomatedMonitoringCTRL1104900(ConfigPipeline):
     def __init__(self, env: Env) -> None:
         super().__init__(env)
@@ -29,30 +31,30 @@ class PLAutomatedMonitoringCTRL1104900(ConfigPipeline):
         thresholds_raw: pd.DataFrame,
         symantec_proxy_outcome: pd.DataFrame,
     ) -> pd.DataFrame:
-    """
-    Core business logic transformer for Symantec Proxy monitoring compliance metrics
-    
-    Args:
-        thresholds_raw: DataFrame containing metric thresholds from SQL query
-        symantec_proxy_outcome: DataFrame containing Symantec Proxy test outcomes
-        context: Pipeline context
+        """
+        Core business logic transformer for Symantec Proxy monitoring compliance metrics
         
-    Returns:
-        DataFrame with standardized output schema
-    """
-    
-    # Step 1: Input Validation (REQUIRED)
-    if thresholds_raw.empty:
-        raise RuntimeError("No threshold data found. Cannot proceed with metrics calculation.")
-    
-    # Step 2: Extract Threshold Configuration
-    thresholds = thresholds_raw.to_dict("records")
-    
-    # Step 3: Calculate metrics for each threshold
-    results = []
-    now = datetime.now()
-    
-    for threshold in thresholds:
+        Args:
+            thresholds_raw: DataFrame containing metric thresholds from SQL query
+            symantec_proxy_outcome: DataFrame containing Symantec Proxy test outcomes
+            context: Pipeline context
+            
+        Returns:
+            DataFrame with standardized output schema
+        """
+        
+        # Step 1: Input Validation (REQUIRED)
+        if thresholds_raw.empty:
+            raise RuntimeError("No threshold data found. Cannot proceed with metrics calculation.")
+        
+        # Step 2: Extract Threshold Configuration
+        thresholds = thresholds_raw.to_dict("records")
+        
+        # Step 3: Calculate metrics for each threshold
+        results = []
+        now = datetime.now()
+        
+        for threshold in thresholds:
         ctrl_id = threshold["control_id"]
         metric_id = threshold["monitoring_metric_id"]
         
@@ -63,12 +65,12 @@ class PLAutomatedMonitoringCTRL1104900(ConfigPipeline):
         alert_threshold = threshold.get("alerting_threshold", 100.0)
         warning_threshold = threshold.get("warning_threshold")
         
-        if metric_value >= alert_threshold:
-            compliance_status = "Green"
-        elif warning_threshold is not None and metric_value >= warning_threshold:
+        if metric_value < alert_threshold:
+            compliance_status = "Red"
+        elif warning_threshold is not None and metric_value < warning_threshold:
             compliance_status = "Yellow"
         else:
-            compliance_status = "Red"
+            compliance_status = "Green"
         
         # Step 4: Format Output with Standard Fields
         result = {
@@ -79,71 +81,71 @@ class PLAutomatedMonitoringCTRL1104900(ConfigPipeline):
             "monitoring_metric_status": compliance_status,
             "metric_value_numerator": int(compliant_count),
             "metric_value_denominator": int(total_count),
-            "resources_info": non_compliant_resources
+            "resources_info": non_compliant_resources,
         }
         results.append(result)
     
-        result_df = pd.DataFrame(results)
-        
-        # Ensure correct data types to match test expectations
-        if not result_df.empty:
-            result_df = result_df.astype(
-                {
-                    "metric_value_numerator": "int64",
-                    "metric_value_denominator": "int64",
-                    "monitoring_metric_value": "float64",
-                }
-            )
-        
-        return result_df
+    result_df = pd.DataFrame(results)
+    
+    # Ensure correct data types to match test expectations
+    if not result_df.empty:
+        result_df = result_df.astype(
+            {
+                "metric_value_numerator": "int64",
+                "metric_value_denominator": "int64",
+                "monitoring_metric_value": "float64",
+            }
+        )
+    
+    return result_df
 
     def _calculate_symantec_proxy_metrics(self, symantec_proxy_outcome: pd.DataFrame):
-    """Calculate Symantec Proxy test success metrics."""
-    metric_value = 0.0
-    compliant_count = 0
-    total_count = 0
-    non_compliant_resources = None
-    
-    if not symantec_proxy_outcome.empty:
-        # Count total tests and successful tests
-        total_tests = len(symantec_proxy_outcome)
-        successful_tests = sum(symantec_proxy_outcome['EXPECTED_OUTCOME'] == symantec_proxy_outcome['ACTUAL_OUTCOME'])
+        """Calculate Symantec Proxy test success metrics."""
+        metric_value = 0.0
+        compliant_count = 0
+        total_count = 0
+        non_compliant_resources = None
         
-        # Calculate metrics
-        if total_tests > 0:
-            metric_value = round(100.0 * successful_tests / total_tests, 2)
-            compliant_count = successful_tests
-            total_count = total_tests
+        if not symantec_proxy_outcome.empty:
+            # Count total tests and successful tests
+            total_tests = len(symantec_proxy_outcome)
+            successful_tests = int(sum(symantec_proxy_outcome['EXPECTED_OUTCOME'] == symantec_proxy_outcome['ACTUAL_OUTCOME']))
             
-            # Report failed tests if any
-            if successful_tests < total_tests:
-                failed_tests = total_tests - successful_tests
-                failed_test_details = []
+            # Calculate metrics
+            if total_tests > 0:
+                metric_value = round(100.0 * successful_tests / total_tests, 2)
+                compliant_count = successful_tests
+                total_count = total_tests
                 
-                # Get details of failed tests
-                for idx, row in symantec_proxy_outcome.iterrows():
-                    if row['EXPECTED_OUTCOME'] != row['ACTUAL_OUTCOME']:
-                        failed_test_details.append({
-                            "test_id": idx,
-                            "expected": row['EXPECTED_OUTCOME'],
-                            "actual": row['ACTUAL_OUTCOME']
-                        })
-                
-                # Limit to first 100 failed tests
-                if len(failed_test_details) > 100:
-                    failed_test_details = failed_test_details[:100]
-                    failed_test_details.append({"message": f"... and {len(failed_test_details) - 100} more failed tests"})
-                
-                non_compliant_resources = [json.dumps(test) for test in failed_test_details]
+                # Report failed tests if any
+                if successful_tests < total_tests:
+                    failed_tests = total_tests - successful_tests
+                    failed_test_details = []
+                    
+                    # Get details of failed tests
+                    for idx, row in symantec_proxy_outcome.iterrows():
+                        if row['EXPECTED_OUTCOME'] != row['ACTUAL_OUTCOME']:
+                            failed_test_details.append({
+                                "test_id": int(idx) if pd.api.types.is_integer_dtype(type(idx)) else idx,
+                                "expected": row['EXPECTED_OUTCOME'],
+                                "actual": row['ACTUAL_OUTCOME']
+                            })
+                    
+                    # Limit to first 100 failed tests
+                    if len(failed_test_details) > 100:
+                        failed_test_details = failed_test_details[:100]
+                        failed_test_details.append({"message": f"... and {len(failed_test_details) - 100} more failed tests"})
+                    
+                    non_compliant_resources = [json.dumps(test) for test in failed_test_details]
+            else:
+                non_compliant_resources = [json.dumps({"issue": "No test data available"})]
         else:
-            non_compliant_resources = [json.dumps({"issue": "No test data available"})]
-    else:
-        non_compliant_resources = [json.dumps({"issue": "No Symantec Proxy outcome data available"})]
-    
+            non_compliant_resources = [json.dumps({"issue": "No Symantec Proxy outcome data available"})]
+        
         return metric_value, compliant_count, total_count, non_compliant_resources
 
-    # This is the extract portion for the API
     def extract(self) -> pd.DataFrame:
+        """Override extract to integrate SQL data with metric calculations"""
         df = super().extract()
         # Wrap the DataFrame in a list to store it as a single value in the cell
         df["monitoring_metrics"] = [self._calculate_metrics(

@@ -1,16 +1,16 @@
 -- sqlfluff:dialect:snowflake
 -- sqlfluff:templater:placeholder:param_style:pyformat
 -- Get the symantec proxy test outcomes from the previous day
-SELECT
-    TEST_ID,
-    TEST_NAME,
-    PLATFORM,
-    EXPECTED_OUTCOME,
-    ACTUAL_OUTCOME,
-    TEST_DESCRIPTION,
-    SF_LOAD_TIMESTAMP
-FROM 
-    CYBR_DB.PHDP_CYBR.outcome_monitoring_storage
-WHERE 
-    DATEDIFF(day, TO_DATE(SF_LOAD_TIMESTAMP), CURRENT_DATE) = 1
-    AND PLATFORM = 'symantec_proxy'
+select
+    test_id,
+    test_name,
+    platform,
+    expected_outcome,
+    actual_outcome,
+    test_description,
+    sf_load_timestamp
+from
+    cybr_db.phdp_cybr.outcome_monitoring_storage
+where
+    datediff(day, to_date(sf_load_timestamp), current_date) = 1
+    and platform = 'symantec_proxy'
