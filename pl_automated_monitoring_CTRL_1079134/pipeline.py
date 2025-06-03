@@ -134,7 +134,7 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
             is_current = pd.to_datetime(macie_metrics['SF_LOAD_TIMESTAMP'].iloc[0]).date() >= \
                          (current_time.date() - pd.Timedelta(days=1))
             
-            buckets_scanned = macie_metrics['TOTAL_BUCKETS_SCANNED_BY_MACIE'].iloc[0] \
+            buckets_scanned = int(macie_metrics['TOTAL_BUCKETS_SCANNED_BY_MACIE'].iloc[0]) \
                              if 'TOTAL_BUCKETS_SCANNED_BY_MACIE' in macie_metrics.columns else 0
             
             # Calculate Tier 0 metric
@@ -168,9 +168,9 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
                          (current_time.date() - pd.Timedelta(days=1))
             
             if is_current:
-                buckets_scanned = macie_metrics['TOTAL_BUCKETS_SCANNED_BY_MACIE'].iloc[0] \
+                buckets_scanned = int(macie_metrics['TOTAL_BUCKETS_SCANNED_BY_MACIE'].iloc[0]) \
                                 if 'TOTAL_BUCKETS_SCANNED_BY_MACIE' in macie_metrics.columns else 0
-                total_buckets = macie_metrics['TOTAL_CLOUDFRONTED_BUCKETS'].iloc[0] \
+                total_buckets = int(macie_metrics['TOTAL_CLOUDFRONTED_BUCKETS'].iloc[0]) \
                               if 'TOTAL_CLOUDFRONTED_BUCKETS' in macie_metrics.columns else 0
                 
                 # Calculate Tier 1 metric
@@ -206,7 +206,7 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
         if not macie_testing.empty:
             # Calculate total tests and successful tests
             total_tests = len(macie_testing)
-            successful_tests = macie_testing['TESTISSUCCESSFUL'].sum() if 'TESTISSUCCESSFUL' in macie_testing.columns else 0
+            successful_tests = int(macie_testing['TESTISSUCCESSFUL'].sum()) if 'TESTISSUCCESSFUL' in macie_testing.columns else 0
             
             # Calculate Tier 2 metric
             if total_tests > 0:
@@ -217,9 +217,9 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
                 # Check for anomalies in test count if historical data is available
                 anomaly_issues = []
                 if not historical_stats.empty:
-                    avg_historical_tests = historical_stats['AVG_HISTORICAL_TESTS'].iloc[0]
-                    min_historical_tests = historical_stats['MIN_HISTORICAL_TESTS'].iloc[0]
-                    max_historical_tests = historical_stats['MAX_HISTORICAL_TESTS'].iloc[0]
+                    avg_historical_tests = float(historical_stats['AVG_HISTORICAL_TESTS'].iloc[0])
+                    min_historical_tests = int(historical_stats['MIN_HISTORICAL_TESTS'].iloc[0])
+                    max_historical_tests = int(historical_stats['MAX_HISTORICAL_TESTS'].iloc[0])
                     
                     # Test count outside historical range or deviates >20% from average
                     if total_tests < min_historical_tests:
