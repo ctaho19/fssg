@@ -3,6 +3,44 @@
 ## Purpose
 This query validates whether the COF System ID Exclusion Rule is working correctly by comparing what should happen (expected) vs. what actually happened (actual) during quarterly certification campaigns.
 
+## Data Sources
+
+Here are all of the datasets used in the SnowFlake Query
+
+  Identity Management Tables (identityiq schema)
+
+  1. identityiq.spt_identity - Core identity/employee records
+  2. identityiq.spt_link - Links between identities and their accounts
+  3. identityiq.spt_application - Applications/systems catalog
+  4. identityiq.spt_identity_entitlement - Entitlements assigned to
+  identities
+  5. identityiq.spt_bundle - Role/bundle definitions
+  6. identityiq.spt_bundle_requirements - Parent-child role relationships
+  7. identityiq.spt_managed_attribute - Entitlement metadata and properties
+
+  Certification Tables (identityiq schema)
+
+  8. identityiq.spt_certification - Certification campaigns
+  9. identityiq.spt_certification_entity - Entities (identities) being
+  certified
+  10. identityiq.spt_certification_item - Individual items in certification
+  11. identityiq.spt_entitlement_snapshot - Snapshot of entitlements at
+  certification time
+  12. identityiq.spt_archived_cert_entity - Archived/excluded certification
+   entities
+  13. identityiq.spt_archived_cert_item - Archived/excluded certification
+  items
+  14. identityiq.spt_certification_tags - Tags associated with
+  certifications
+  15. identityiq.spt_tag - Tag definitions
+
+  Custom Exclusion Table (iiqcap1 schema)
+
+  16. iiqcap1.certification_exclusion - Custom exclusion rules
+  configuration
+
+  Total: 16 tables (15 from identityiq schema, 1 from iiqcap1 schema)
+
 ## Query Output Columns
 
 ### 1. **ITEM_TYPE**
