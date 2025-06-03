@@ -65,11 +65,11 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
             
             if tier == "Tier 0":
                 # Tier 0: Heartbeat - Check if Macie data is current and buckets are being scanned
-                metric_value, compliant_count, total_count, non_compliant_resources = self._calculate_tier0_metrics(macie_metrics)
+                metric_value, compliant_count, total_count, non_compliant_resources = self._calculate_tier0_metrics(macie_metrics, now)
                 
             elif tier == "Tier 1":
                 # Tier 1: Completeness - Calculate percentage of buckets scanned vs total CloudFronted buckets
-                metric_value, compliant_count, total_count, non_compliant_resources = self._calculate_tier1_metrics(macie_metrics)
+                metric_value, compliant_count, total_count, non_compliant_resources = self._calculate_tier1_metrics(macie_metrics, now)
                 
             elif tier == "Tier 2":
                 # Tier 2: Accuracy - Calculate test success rate with anomaly detection
@@ -121,7 +121,7 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
         
         return result_df
 
-    def _calculate_tier0_metrics(self, macie_metrics: pd.DataFrame):
+    def _calculate_tier0_metrics(self, macie_metrics: pd.DataFrame, current_time: datetime):
         """Calculate Tier 0 (Heartbeat) metrics for Macie monitoring."""
         metric_value = 0.0
         compliant_count = 0
@@ -130,9 +130,9 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
         
         if not macie_metrics.empty:
             # Check if data is current (within last day)
-            # Using datetime.now() from parent method for consistency with test freezing
+            # Using current_time from parent method for consistency with test freezing
             is_current = pd.to_datetime(macie_metrics['SF_LOAD_TIMESTAMP'].iloc[0]).date() >= \
-                         (datetime.now().date() - pd.Timedelta(days=1))
+                         (current_time.date() - pd.Timedelta(days=1))
             
             buckets_scanned = macie_metrics['TOTAL_BUCKETS_SCANNED_BY_MACIE'].iloc[0] \
                              if 'TOTAL_BUCKETS_SCANNED_BY_MACIE' in macie_metrics.columns else 0
@@ -154,7 +154,7 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
         
         return metric_value, compliant_count, total_count, non_compliant_resources
 
-    def _calculate_tier1_metrics(self, macie_metrics: pd.DataFrame):
+    def _calculate_tier1_metrics(self, macie_metrics: pd.DataFrame, current_time: datetime):
         """Calculate Tier 1 (Completeness) metrics for Macie monitoring."""
         metric_value = 0.0
         compliant_count = 0
@@ -163,9 +163,9 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
         
         if not macie_metrics.empty:
             # Check if data is current (within last day)
-            # Using datetime.now() from parent method for consistency with test freezing
+            # Using current_time from parent method for consistency with test freezing
             is_current = pd.to_datetime(macie_metrics['SF_LOAD_TIMESTAMP'].iloc[0]).date() >= \
-                         (datetime.now().date() - pd.Timedelta(days=1))
+                         (current_time.date() - pd.Timedelta(days=1))
             
             if is_current:
                 buckets_scanned = macie_metrics['TOTAL_BUCKETS_SCANNED_BY_MACIE'].iloc[0] \
