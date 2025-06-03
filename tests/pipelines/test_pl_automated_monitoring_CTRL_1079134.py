@@ -185,6 +185,7 @@ def test_extract_method_empty_thresholds():
         with pytest.raises(RuntimeError, match="No threshold data found"):
             pipeline.extract()
 
+@freeze_time("2024-11-05 12:09:00")
 def test_extract_method_tier_calculations():
     """Test individual tier metric calculations"""
     env = MockEnv()
@@ -219,6 +220,7 @@ def test_extract_method_tier_calculations():
         assert tier2_row["metric_value_numerator"] == 4
         assert tier2_row["metric_value_denominator"] == 5
 
+@freeze_time("2024-11-05 12:09:00")
 def test_extract_method_empty_data_handling():
     """Test handling of empty data scenarios"""
     env = MockEnv()
@@ -246,6 +248,7 @@ def test_extract_method_empty_data_handling():
             assert row["monitoring_metric_value"] == 0.0
             assert row["monitoring_metric_status"] == "Red"
 
+@freeze_time("2024-11-05 12:09:00")
 def test_extract_method_compliance_status_logic():
     """Test compliance status determination logic"""
     env = MockEnv()
@@ -290,6 +293,7 @@ def test_extract_method_compliance_status_logic():
             
             assert metrics_df.iloc[0]["monitoring_metric_status"] == expected_status
 
+@freeze_time("2024-11-05 12:09:00")
 def test_extract_method_division_by_zero_protection():
     """Test that division by zero is handled gracefully"""
     env = MockEnv()
@@ -322,6 +326,7 @@ def test_extract_method_division_by_zero_protection():
             assert isinstance(row["monitoring_metric_value"], float)
             assert row["monitoring_metric_value"] >= 0.0
 
+@freeze_time("2024-11-05 12:09:00")
 def test_extract_method_incomplete_data_handling():
     """Test handling of incomplete or missing data fields"""
     env = MockEnv()
@@ -352,6 +357,7 @@ def test_extract_method_incomplete_data_handling():
             assert row["monitoring_metric_value"] == 0.0
             assert row["monitoring_metric_status"] == "Red"
 
+@freeze_time("2024-11-05 12:09:00")
 def test_extract_method_data_types_validation():
     """Test that output data types match requirements"""
     env = MockEnv()
@@ -381,6 +387,7 @@ def test_extract_method_data_types_validation():
             # resources_info can be None or list
             assert row["resources_info"] is None or isinstance(row["resources_info"], list)
 
+@freeze_time("2024-11-05 12:09:00")
 def test_extract_method_metric_value_ranges():
     """Test that metric values are within expected ranges"""
     env = MockEnv()
@@ -428,6 +435,7 @@ def test_extract_method_timestamp_consistency():
         assert len(timestamps) == 1
         assert timestamps[0] == datetime(2024, 11, 5, 12, 9, 0)
 
+@freeze_time("2024-11-05 12:09:00")
 def test_extract_method_control_id_consistency():
     """Test that control ID is consistent across all metrics"""
     env = MockEnv()
@@ -450,6 +458,7 @@ def test_extract_method_control_id_consistency():
         assert len(control_ids) == 1
         assert control_ids[0] == "CTRL-1079134"
 
+@freeze_time("2024-11-05 12:09:00")
 def test_extract_method_metric_id_consistency():
     """Test that metric IDs match expected values"""
     env = MockEnv()
@@ -471,6 +480,7 @@ def test_extract_method_metric_id_consistency():
         metric_ids = sorted(metrics_df["monitoring_metric_id"].tolist())
         assert metric_ids == [34, 35, 36]
 
+@freeze_time("2024-11-05 12:09:00")
 def test_extract_method_data_type_enforcement():
     """Test that extract method enforces correct data types"""
     env = MockEnv()
@@ -527,7 +537,7 @@ def test_main_function_execution():
     mock_env = Mock()
     
     with patch("etip_env.set_env_vars", return_value=mock_env):
-        with patch("pl_automated_monitoring_ctrl_1079134.pipeline.run") as mock_run:
+        with patch("pipelines.pl_automated_monitoring_ctrl_1079134.pipeline.run") as mock_run:
             with patch("sys.exit") as mock_exit:
                 # Execute main block
                 code = """
