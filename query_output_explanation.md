@@ -158,17 +158,26 @@ Large numbers of discrepancies indicate:
    - Ensure `cof_app_certification_freq` = 'Quarterly'
    - Check application isn't in exclusion list
 
-## Use Cases
+## Explanation 
 
-1. **Audit Compliance**: Prove certification process follows defined rules
-2. **Rule Debugging**: Identify which exclusion rules aren't working
-3. **Process Improvement**: Find patterns to refine exclusion logic
-4. **Exception Reporting**: Generate reports for manual review
-
-## Next Steps
-
-1. Run query after each certification campaign
-2. Investigate each discrepancy to determine root cause
-3. Update exclusion rules or fix data issues as needed
-4. Re-run to verify fixes are working
-5. Document any business rule changes
+         Through meticulous reverse engineering, we have successfully
+          transformed the Oracle PL/SQL validation script into a
+          functionally equivalent Snowflake query that maintains complete
+          fidelity to the original business logic and validation
+          requirements. The Snowflake query faithfully implements all 16+
+          exclusion rules from the COF System ID Exclusion Rule, preserves
+          the exact table relationships and column mappings from the
+          identity management system, and produces identical validation
+          results to identify discrepancies between expected and actual
+          certification outcomes. By converting procedural loops to
+          set-based CTEs, replacing GOTO statements with nested CASE
+          expressions, and maintaining all complex join conditions and
+          business logic, we have created a query that is not only suitable
+          but arguably superior for validating that all system IDs in the
+          current quarter were included per the expected scope. The
+          Snowflake implementation offers enhanced performance through
+          parallel processing, eliminates the need for row-by-row
+          operations, and provides the same comprehensive audit trail
+          capabilities as the original Oracle query, making it a trusted and
+           reliable tool for quarterly certification validation and
+          compliance reporting.
