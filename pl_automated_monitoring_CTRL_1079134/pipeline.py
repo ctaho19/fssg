@@ -1,9 +1,10 @@
 import json
 from datetime import datetime
-from pathlib import Path
 import pandas as pd
+
 from config_pipeline import ConfigPipeline
 from etip_env import Env
+
 
 def run(
     env: Env,
@@ -18,6 +19,7 @@ def run(
         return pipeline.run_test_data_export(dq_actions=dq_actions)
     else:
         return pipeline.run(load=is_load, dq_actions=dq_actions)
+
 
 class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
     def __init__(self, env: Env) -> None:
@@ -85,9 +87,9 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
             alert_threshold = threshold.get("alerting_threshold", 100.0)
             warning_threshold = threshold.get("warning_threshold")
             
-            if metric_value >= alert_threshold:
+            if warning_threshold is not None and metric_value >= warning_threshold:
                 compliance_status = "Green"
-            elif warning_threshold is not None and metric_value >= warning_threshold:
+            elif metric_value >= alert_threshold:
                 compliance_status = "Yellow"
             else:
                 compliance_status = "Red"
@@ -101,7 +103,7 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
                 "monitoring_metric_status": compliance_status,
                 "metric_value_numerator": int(compliant_count),
                 "metric_value_denominator": int(total_count),
-                "resources_info": non_compliant_resources
+                "resources_info": non_compliant_resources,
             }
             results.append(result)
         
@@ -128,8 +130,9 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
         
         if not macie_metrics.empty:
             # Check if data is current (within last day)
+            # Using datetime.now() from parent method for consistency with test freezing
             is_current = pd.to_datetime(macie_metrics['SF_LOAD_TIMESTAMP'].iloc[0]).date() >= \
-                         (pd.Timestamp.now().date() - pd.Timedelta(days=1))
+                         (datetime.now().date() - pd.Timedelta(days=1))
             
             buckets_scanned = macie_metrics['TOTAL_BUCKETS_SCANNED_BY_MACIE'].iloc[0] \
                              if 'TOTAL_BUCKETS_SCANNED_BY_MACIE' in macie_metrics.columns else 0
@@ -160,8 +163,9 @@ class PLAutomatedMonitoringCTRL1079134(ConfigPipeline):
         
         if not macie_metrics.empty:
             # Check if data is current (within last day)
+            # Using datetime.now() from parent method for consistency with test freezing
             is_current = pd.to_datetime(macie_metrics['SF_LOAD_TIMESTAMP'].iloc[0]).date() >= \
-                         (pd.Timestamp.now().date() - pd.Timedelta(days=1))
+                         (datetime.now().date() - pd.Timedelta(days=1))
             
             if is_current:
                 buckets_scanned = macie_metrics['TOTAL_BUCKETS_SCANNED_BY_MACIE'].iloc[0] \

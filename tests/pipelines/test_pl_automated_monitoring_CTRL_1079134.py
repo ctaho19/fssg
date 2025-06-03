@@ -7,7 +7,7 @@ import json
 from config_pipeline import ConfigPipeline
 
 # Import pipeline components
-from pipelines.pl_automated_monitoring_CTRL_1079134.pipeline import (
+from pipelines.pl_automated_monitoring_ctrl_1079134.pipeline import (
     PLAutomatedMonitoringCTRL1079134,
     run
 )
@@ -498,7 +498,7 @@ def test_run_function_normal_path():
     """Test run function normal execution path"""
     env = MockEnv()
     
-    with patch('pl_automated_monitoring_CTRL_1079134.pipeline.PLAutomatedMonitoringCTRL1079134') as mock_pipeline_class:
+    with patch('pipelines.pl_automated_monitoring_ctrl_1079134.pipeline.PLAutomatedMonitoringCTRL1079134') as mock_pipeline_class:
         mock_pipeline = Mock()
         mock_pipeline_class.return_value = mock_pipeline
         
@@ -512,7 +512,7 @@ def test_run_function_export_test_data():
     """Test run function with export test data path"""
     env = MockEnv()
     
-    with patch('pl_automated_monitoring_CTRL_1079134.pipeline.PLAutomatedMonitoringCTRL1079134') as mock_pipeline_class:
+    with patch('pipelines.pl_automated_monitoring_ctrl_1079134.pipeline.PLAutomatedMonitoringCTRL1079134') as mock_pipeline_class:
         mock_pipeline = Mock()
         mock_pipeline_class.return_value = mock_pipeline
         
@@ -527,13 +527,13 @@ def test_main_function_execution():
     mock_env = Mock()
     
     with patch("etip_env.set_env_vars", return_value=mock_env):
-        with patch("pl_automated_monitoring_CTRL_1079134.pipeline.run") as mock_run:
+        with patch("pl_automated_monitoring_ctrl_1079134.pipeline.run") as mock_run:
             with patch("sys.exit") as mock_exit:
                 # Execute main block
                 code = """
 if True:
     from etip_env import set_env_vars
-    from pl_automated_monitoring_CTRL_1079134.pipeline import run
+    from pipelines.pl_automated_monitoring_ctrl_1079134.pipeline import run
     
     env = set_env_vars()
     try:
