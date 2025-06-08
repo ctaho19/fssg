@@ -1,0 +1,168 @@
+pipeline:
+  name: pl_automated_monitoring_scp_controls
+  use_test_data_on_nonprod: false
+  dq_strict_mode: false
+
+environments:
+  prod:
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds.sql"
+      in_scope_accounts:
+        connector: snowflake
+        options:
+          sql: "@text:sql/in_scope_accounts.sql"
+      evaluated_accounts:
+        connector: snowflake
+        options:
+          sql: "@text:sql/evaluated_accounts.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+  qa: &nonprod_config
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds_qa.sql"
+      in_scope_accounts:
+        connector: snowflake
+        options:
+          sql: "@text:sql/in_scope_accounts_qa.sql"
+      evaluated_accounts:
+        connector: snowflake
+        options:
+          sql: "@text:sql/evaluated_accounts_qa.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: fact_controls_monitoring_metrics_daily_v4
+            file_type: AVRO
+            avro_schema: "@json:avro_schema_qa.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+  local: *nonprod_config
+
+stages:
+  - name: ingress_validation
+    description: "Validate data quality of input datasets"
+    envs: [qa, prod, local]
+  - name: extract
+    description: "Extract data from Snowflake"
+    envs: [qa, prod, local]
+  - name: transform
+    description: "Calculate control metrics"
+    envs: [qa, prod, local]
+  - name: egress_validation
+    description: "Validate transformed metrics before loading"
+    envs: [qa, prod, local]
+  - name: load
+    description: "Load metrics to OneStream"
+    envs: [qa, prod, local]
+
+# REQUIRED: Comprehensive Data Quality Validation
+ingress_validation:
+  thresholds_raw:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        required_columns:
+          - monitoring_metric_id
+          - control_id
+          - monitoring_metric_tier
+          - metric_name
+          - metric_description
+          - warning_threshold
+          - alerting_threshold
+          - control_executor
+    - type: count_check
+      fatal: true
+      envs: [qa, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        check_type: "data_freshness"
+        description: "Ingress data quality check for thresholds"
+  
+  in_scope_accounts:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        required_columns:
+          - ACCOUNT
+    - type: count_check
+      fatal: true
+      envs: [qa, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        check_type: "data_freshness"
+        description: "Ingress data quality check for account list"
+  
+  evaluated_accounts:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        required_columns:
+          - RESOURCE_ID
+          - RESOURCE_TYPE
+          - COMPLIANCE_STATUS
+          - CONTROL_ID
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        check_type: "data_freshness"
+        description: "Ingress data quality check for evaluations"
+
+egress_validation:
+  monitoring_metrics:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        required_columns:
+          - control_monitoring_utc_timestamp
+          - control_id
+          - monitoring_metric_id
+          - monitoring_metric_value
+          - monitoring_metric_status
+          - metric_value_numerator
+          - metric_value_denominator
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        description: "Egress data will not match ingress data due to metric calculations"

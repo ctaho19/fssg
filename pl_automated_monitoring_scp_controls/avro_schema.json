@@ -1,0 +1,49 @@
+{
+    "type": "record",
+    "name": "etip_controls_monitoring_metrics",
+    "namespace": "com.capitalone.techcos.etip",
+    "fields": [
+        {
+            "name": "control_monitoring_utc_timestamp",
+            "type": {
+                "type": "long",
+                "logicalType": "timestamp-millis"
+            }
+        },
+        {
+            "name": "control_id",
+            "type": "string"
+        },
+        {
+            "name": "monitoring_metric_id",
+            "type": "string"
+        },
+        {
+            "name": "monitoring_metric_value",
+            "type": "double"
+        },
+        {
+            "name": "monitoring_metric_status",
+            "type": "string"
+        },
+        {
+            "name": "metric_value_numerator",
+            "type": "long"
+        },
+        {
+            "name": "metric_value_denominator",
+            "type": "long"
+        },
+        {
+            "name": "resources_info",
+            "type": [
+                "null",
+                {
+                    "type": "array",
+                    "items": "string"
+                }
+            ],
+            "default": null
+        }
+    ]
+}

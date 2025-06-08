@@ -13,7 +13,7 @@ SELECT DISTINCT
     SF_LOAD_TIMESTAMP,
     LOAD_TIMESTAMP
 FROM
-    etip_db.qhdp_techcos.dim_iam_roles
+    etip_db.qhdp_cybr.identity_reports_iam_resource_v4
 WHERE
     ROLE_TYPE = 'MACHINE'
     AND ACCOUNT IS NOT NULL
