@@ -43,13 +43,13 @@ CONTROL_CONFIGS = {
 def run(env: Env, is_load: bool = True, dq_actions: bool = True):
     """Run the consolidated CloudRadar controls pipeline."""
     pipeline = PLAutomatedMonitoringCloudradarControls(env)
-    pipeline.configure_from_filename(str(Path(file).parent / "config.yml"))
+    pipeline.configure_from_filename(str(Path(__file__).parent / "config.yml"))
     return pipeline.run(load=is_load, dq_actions=dq_actions)
 
 
 class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
-    def init(self, env: Env) -> None:
-        super().init(env)
+    def __init__(self, env: Env) -> None:
+        super().__init__(env)
         self.env = env
         self.api_url = f"https://{self.env.exchange.exchange_url}/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
     
