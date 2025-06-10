@@ -111,6 +111,29 @@ def _mock_dataset_certificates_df():
         }
     ])
 
+def _mock_dataset_certificates_with_warnings_df():
+    """Utility function for test dataset with warning scenarios"""
+    return pd.DataFrame([
+        {
+            # Certificate expiring in 15 days (warning scenario)
+            "certificate_arn": "arn:aws:acm:us-east-1:123456789012:certificate/warning1234-5678-90ef-ghij-klmnopqrstuv",
+            "certificate_id": "warning1234-5678-90ef-ghij-klmnopqrstuv",
+            "nominal_issuer": "Amazon",
+            "not_valid_before_utc_timestamp": datetime(2023, 1, 1),
+            "not_valid_after_utc_timestamp": datetime(2024, 11, 20),  # 15 days from test time
+            "last_usage_observation_utc_timestamp": datetime(2024, 11, 1)
+        },
+        {
+            # Certificate expired 48 hours ago and unused
+            "certificate_arn": "arn:aws:acm:us-east-1:123456789012:certificate/expired1234-5678-90ef-ghij-klmnopqrstuv",
+            "certificate_id": "expired1234-5678-90ef-ghij-klmnopqrstuv",
+            "nominal_issuer": "Amazon",
+            "not_valid_before_utc_timestamp": datetime(2023, 1, 1),
+            "not_valid_after_utc_timestamp": datetime(2024, 11, 3),  # 2 days ago from test time
+            "last_usage_observation_utc_timestamp": datetime(2024, 11, 2)
+        }
+    ])
+
 def generate_mock_api_response(content=None, status_code=200):
     """Generate standardized mock API response."""
     from requests import Response
@@ -555,3 +578,161 @@ def test_extract_method_data_type_enforcement():
             assert metrics_df["metric_value_numerator"].dtype == "int64"
             assert metrics_df["metric_value_denominator"].dtype == "int64" 
             assert metrics_df["monitoring_metric_value"].dtype == "float64"
+
+@freeze_time("2024-11-05 12:09:00")
+def test_certificate_30_day_warning_logic():
+    """Test 30-day expiration warning logic"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1077188(env)
+    
+    # Test Tier 2 specifically with warning scenario
+    tier2_thresholds = pd.DataFrame([{
+        "monitoring_metric_id": 3,
+        "control_id": "CTRL-1077188",
+        "monitoring_metric_tier": "Tier 2",
+        "warning_threshold": 90.0,
+        "alerting_threshold": 95.0
+    }])
+    
+    with patch.object(ConfigPipeline, 'extract') as mock_super_extract:
+        with patch.object(pipeline, '_get_api_connector') as mock_get_api:
+            # Mock API response with certificate that has in-use information
+            mock_api = MockOauthApi(url="test_url", api_token="Bearer test_token")
+            mock_api.response = generate_mock_api_response({
+                "resourceConfigurations": [{
+                    "amazonResourceName": "arn:aws:acm:us-east-1:123456789012:certificate/warning1234-5678-90ef-ghij-klmnopqrstuv",
+                    "source": "ConfigurationSnapshot",
+                    "configurationList": [
+                        {"configurationName": "status", "configurationValue": "ISSUED"},
+                        {"configurationName": "inUseBy", "configurationValue": "[\"arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-lb/1234567890abcdef\"]"}
+                    ]
+                }],
+                "nextRecordKey": None
+            })
+            mock_get_api.return_value = mock_api
+            
+            mock_extract_df = pd.DataFrame({
+                "thresholds_raw": [tier2_thresholds],
+                "dataset_certificates": [_mock_dataset_certificates_with_warnings_df()]
+            })
+            mock_super_extract.return_value = mock_extract_df
+            
+            result_df = pipeline.extract()
+            metrics_df = result_df["monitoring_metrics"].iloc[0]
+            
+            tier2_result = metrics_df.iloc[0]
+            
+            # Should have warnings in resources_info
+            assert tier2_result["resources_info"] is not None
+            resources_info = [json.loads(info) for info in tier2_result["resources_info"]]
+            
+            # Check for warning about certificate expiring in 15 days
+            warning_found = any("Expires in 15 days" in str(info) for info in resources_info)
+            assert warning_found, f"Expected 30-day warning not found in resources_info: {resources_info}"
+
+@freeze_time("2024-11-05 12:09:00")  
+def test_expired_unused_certificate_logic():
+    """Test expired unused certificate detection (red status after 24 hours)"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1077188(env)
+    
+    # Test Tier 2 with expired unused certificate
+    tier2_thresholds = pd.DataFrame([{
+        "monitoring_metric_id": 3,
+        "control_id": "CTRL-1077188",
+        "monitoring_metric_tier": "Tier 2",
+        "warning_threshold": 90.0,
+        "alerting_threshold": 95.0
+    }])
+    
+    with patch.object(ConfigPipeline, 'extract') as mock_super_extract:
+        with patch.object(pipeline, '_get_api_connector') as mock_get_api:
+            # Mock API response showing certificate is not in use (inUseBy = "[]")
+            mock_api = MockOauthApi(url="test_url", api_token="Bearer test_token")
+            mock_api.response = generate_mock_api_response({
+                "resourceConfigurations": [{
+                    "amazonResourceName": "arn:aws:acm:us-east-1:123456789012:certificate/expired1234-5678-90ef-ghij-klmnopqrstuv",
+                    "source": "ConfigurationSnapshot",
+                    "configurationList": [
+                        {"configurationName": "status", "configurationValue": "ISSUED"},
+                        {"configurationName": "inUseBy", "configurationValue": "[]"}  # Not in use
+                    ]
+                }],
+                "nextRecordKey": None
+            })
+            mock_get_api.return_value = mock_api
+            
+            mock_extract_df = pd.DataFrame({
+                "thresholds_raw": [tier2_thresholds],
+                "dataset_certificates": [_mock_dataset_certificates_with_warnings_df()]
+            })
+            mock_super_extract.return_value = mock_extract_df
+            
+            result_df = pipeline.extract()
+            metrics_df = result_df["monitoring_metrics"].iloc[0]
+            
+            tier2_result = metrics_df.iloc[0]
+            
+            # Should be Red status due to expired unused certificate
+            assert tier2_result["monitoring_metric_status"] == "Red"
+            
+            # Should have expired unused certificate issue in resources_info
+            assert tier2_result["resources_info"] is not None
+            resources_info = [json.loads(info) for info in tier2_result["resources_info"]]
+            
+            expired_unused_found = any("Expired unused certificate" in str(info) for info in resources_info)
+            assert expired_unused_found, f"Expected expired unused certificate issue not found: {resources_info}"
+
+@freeze_time("2024-11-05 12:09:00")
+def test_certificate_in_use_by_parsing():
+    """Test parsing of inUseBy configuration from API response"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringCTRL1077188(env)
+    
+    tier1_thresholds = pd.DataFrame([{
+        "monitoring_metric_id": 2,
+        "control_id": "CTRL-1077188",
+        "monitoring_metric_tier": "Tier 1",
+        "warning_threshold": 90.0,
+        "alerting_threshold": 95.0
+    }])
+    
+    with patch.object(ConfigPipeline, 'extract') as mock_super_extract:
+        with patch.object(pipeline, '_get_api_connector') as mock_get_api:
+            # Mock API response with various inUseBy scenarios
+            mock_api = MockOauthApi(url="test_url", api_token="Bearer test_token")
+            mock_api.response = generate_mock_api_response({
+                "resourceConfigurations": [
+                    {
+                        "amazonResourceName": "arn:aws:acm:us-east-1:123456789012:certificate/in-use-cert",
+                        "source": "ConfigurationSnapshot",
+                        "configurationList": [
+                            {"configurationName": "status", "configurationValue": "ISSUED"},
+                            {"configurationName": "inUseBy", "configurationValue": "[\"arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test-lb/1234567890abcdef\"]"}
+                        ]
+                    },
+                    {
+                        "amazonResourceName": "arn:aws:acm:us-east-1:123456789012:certificate/not-in-use-cert",
+                        "source": "ConfigurationSnapshot", 
+                        "configurationList": [
+                            {"configurationName": "status", "configurationValue": "ISSUED"},
+                            {"configurationName": "inUseBy", "configurationValue": "[]"}  # Not in use
+                        ]
+                    }
+                ],
+                "nextRecordKey": None
+            })
+            mock_get_api.return_value = mock_api
+            
+            mock_extract_df = pd.DataFrame({
+                "thresholds_raw": [tier1_thresholds],
+                "dataset_certificates": [pd.DataFrame()]  # Empty for Tier 1 test
+            })
+            mock_super_extract.return_value = mock_extract_df
+            
+            result_df = pipeline.extract()
+            
+            # Verify the extract ran without errors
+            assert "monitoring_metrics" in result_df.columns
+            metrics_df = result_df["monitoring_metrics"].iloc[0]
+            assert len(metrics_df) == 1

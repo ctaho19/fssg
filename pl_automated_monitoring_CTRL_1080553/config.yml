@@ -13,7 +13,7 @@ environments:
       proofpoint_outcome:
         connector: snowflake
         options:
-          sql: "@text:sql/proofpoint_outcome.sql"
+          sql: "@text:sql/proofpoint_tests_outcome.sql"
     load:
       monitoring_metrics:
         - connector: onestream
@@ -32,7 +32,7 @@ environments:
       proofpoint_outcome:
         connector: snowflake
         options:
-          sql: "@text:sql/proofpoint_outcome.sql"
+          sql: "@text:sql/proofpoint_tests_outcome.sql"
     load:
       monitoring_metrics:
         - connector: onestream

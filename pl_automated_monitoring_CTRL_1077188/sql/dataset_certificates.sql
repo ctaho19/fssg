@@ -1,6 +1,6 @@
 -- sqlfluff:dialect:snowflake
 -- sqlfluff:templater:placeholder:param_style:pyformat
--- Get certificate dataset for coverage and compliance calculations
+-- Get raw certificate dataset for coverage and compliance calculations
 SELECT DISTINCT
     certificate_arn,
     certificate_id,

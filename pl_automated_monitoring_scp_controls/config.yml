@@ -14,6 +14,14 @@ environments:
         connector: snowflake
         options:
           sql: "@text:sql/in_scope_accounts.sql"
+      in_scope_asvs:
+        connector: snowflake
+        options:
+          sql: "@text:sql/in_scope_asvs.sql"
+      microcertification_asvs:
+        connector: snowflake
+        options:
+          sql: "@text:sql/microcertification_asvs.sql"
       evaluated_accounts:
         connector: snowflake
         options:
@@ -37,6 +45,14 @@ environments:
         connector: snowflake
         options:
           sql: "@text:sql/in_scope_accounts_qa.sql"
+      in_scope_asvs:
+        connector: snowflake
+        options:
+          sql: "@text:sql/in_scope_asvs_qa.sql"
+      microcertification_asvs:
+        connector: snowflake
+        options:
+          sql: "@text:sql/microcertification_asvs_qa.sql"
       evaluated_accounts:
         connector: snowflake
         options:
@@ -122,6 +138,44 @@ ingress_validation:
         check_type: "data_freshness"
         description: "Ingress data quality check for account list"
   
+  in_scope_asvs:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        required_columns:
+          - ASV
+    - type: count_check
+      fatal: true
+      envs: [qa, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        check_type: "data_freshness"
+        description: "Ingress data quality check for ASV list"
+  
+  microcertification_asvs:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        required_columns:
+          - ASV
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        check_type: "data_freshness"
+        description: "Ingress data quality check for microcertification ASV list"
+  
   evaluated_accounts:
     - type: schema_check
       fatal: false
@@ -133,6 +187,13 @@ ingress_validation:
           - RESOURCE_TYPE
           - COMPLIANCE_STATUS
           - CONTROL_ID
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [qa, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
     - type: consistency_check
       fatal: false
       informational: true

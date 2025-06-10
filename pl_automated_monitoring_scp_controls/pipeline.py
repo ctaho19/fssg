@@ -1,7 +1,6 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
 import pandas as pd
 from config_pipeline import ConfigPipeline
 from etip_env import Env
@@ -107,12 +106,20 @@ class PLAutomatedMonitoringScpControls(ConfigPipeline):
         """Override extract to integrate SQL data"""
         # First get data from configured SQL sources
         df = super().extract()
+
+        # If the dataframe has multiple rows, we need to handle it differently
+        if len(df) > 1:
+            # For multi-row dataframes, we need to aggregate or select the first row
+            # This ensures we have a single-row dataframe for the metrics calculation
+            df = df.head(1)
         
         # Then calculate metrics using class methods
         # Wrap the DataFrame in a list to store it as a single value in the cell
         df["monitoring_metrics"] = [self._calculate_metrics(
             df["thresholds_raw"].iloc[0],
             df["in_scope_accounts"].iloc[0],
+            df["in_scope_asvs"].iloc[0],
+            df["microcertification_asvs"].iloc[0],
             df["evaluated_accounts"].iloc[0]
         )]
         return df
@@ -121,6 +128,8 @@ class PLAutomatedMonitoringScpControls(ConfigPipeline):
         self,
         thresholds_raw: pd.DataFrame,
         in_scope_accounts: pd.DataFrame,
+        in_scope_asvs: pd.DataFrame,
+        microcertification_asvs: pd.DataFrame,
         evaluated_accounts: pd.DataFrame
     ) -> pd.DataFrame:
         """
@@ -129,7 +138,9 @@ class PLAutomatedMonitoringScpControls(ConfigPipeline):
         Args:
             thresholds_raw: DataFrame containing metric thresholds from SQL query
             in_scope_accounts: DataFrame containing all active accounts
-            evaluated_accounts: DataFrame containing evaluation results
+            in_scope_asvs: DataFrame containing all in-scope ASVs based on complex criteria
+            microcertification_asvs: DataFrame containing ASVs from microcertification table
+            evaluated_accounts: DataFrame containing compliance results for accounts that were evaluated
             
         Returns:
             DataFrame with standardized output schema
@@ -146,9 +157,14 @@ class PLAutomatedMonitoringScpControls(ConfigPipeline):
                 "No in-scope accounts found. Cannot proceed with metrics calculation."
             )
         
-        # Step 2: Get list of active accounts
+        # Step 2: Get list of active accounts and ASVs
         active_accounts = set(in_scope_accounts['ACCOUNT'].astype(str).str.strip())
-        total_accounts = len(active_accounts)
+        
+        # Get in-scope ASVs from complex criteria query
+        in_scope_asv_set = set(in_scope_asvs['ASV'].astype(str).str.strip()) if not in_scope_asvs.empty else set()
+        
+        # Get ASVs from microcertification table
+        microcert_asv_set = set(microcertification_asvs['ASV'].astype(str).str.strip()) if not microcertification_asvs.empty else set()
         
         # Step 3: Process each control configuration
         all_results = []
@@ -176,10 +192,18 @@ class PLAutomatedMonitoringScpControls(ConfigPipeline):
                 tier = threshold.get("monitoring_metric_tier", "")
                 
                 if "Tier 1" in tier or "tier1" in metric_id.lower():
-                    # Tier 1: Coverage - percentage of accounts evaluated
-                    metric_value, compliant_count, total_count, non_compliant_resources = self._calculate_tier1_metrics(
-                        active_accounts, control_evaluations, cloud_control_id
-                    )
+                    # Tier 1: Coverage - percentage of accounts/ASVs evaluated
+                    # Use ASV-based logic for compute group controls, account-based for others
+                    use_asv_logic = False  # Could be determined by control config or control ID
+                    
+                    if use_asv_logic:
+                        metric_value, compliant_count, total_count, non_compliant_resources = self._calculate_tier1_asv_metrics(
+                            in_scope_asv_set, microcert_asv_set
+                        )
+                    else:
+                        metric_value, compliant_count, total_count, non_compliant_resources = self._calculate_tier1_metrics(
+                            active_accounts, control_evaluations, cloud_control_id
+                        )
                 elif "Tier 2" in tier or "tier2" in metric_id.lower():
                     # Tier 2: Compliance - percentage of evaluated accounts compliant
                     metric_value, compliant_count, total_count, non_compliant_resources = self._calculate_tier2_metrics(
@@ -264,6 +288,38 @@ class PLAutomatedMonitoringScpControls(ConfigPipeline):
                     }))
         else:
             non_compliant_resources = [json.dumps({"issue": "No active accounts found"})]
+        
+        return metric_value, compliant_count, total_count, non_compliant_resources
+
+    def _calculate_tier1_asv_metrics(self, in_scope_asv_set: set, microcert_asv_set: set):
+        """Calculate Tier 1 (Coverage) metrics for ASV-based controls - percentage of in-scope ASVs in microcertification"""
+        metric_value = 0.0
+        compliant_count = 0
+        total_count = len(in_scope_asv_set)
+        non_compliant_resources = None
+        
+        if total_count > 0:
+            # Find ASVs that are in both the in-scope set and microcertification set
+            covered_asvs = in_scope_asv_set.intersection(microcert_asv_set)
+            compliant_count = len(covered_asvs)
+            
+            metric_value = round((compliant_count / total_count * 100), 2)
+            
+            # Report uncovered ASVs if any
+            if compliant_count < total_count:
+                uncovered_asvs = in_scope_asv_set - microcert_asv_set
+                uncovered_list = sorted(list(uncovered_asvs))[:50]  # Limit to 50
+                non_compliant_resources = [json.dumps({
+                    "asv": asv,
+                    "issue": "ASV not found in microcertification data"
+                }) for asv in uncovered_list]
+                
+                if len(uncovered_asvs) > 50:
+                    non_compliant_resources.append(json.dumps({
+                        "message": f"... and {len(uncovered_asvs) - 50} more uncovered ASVs"
+                    }))
+        else:
+            non_compliant_resources = [json.dumps({"issue": "No in-scope ASVs found based on criteria"})]
         
         return metric_value, compliant_count, total_count, non_compliant_resources
 

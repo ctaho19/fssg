@@ -26,5 +26,6 @@ where
         'CTRL-1101989',  -- AC-6.AWS.68.v02
         'CTRL-1094973',  -- AC-6.AWS.62.v02
         'CTRL-1088212',  -- AC-6.AWS.52.v02
-        'CTRL-1078031'   -- AC-3.AWS.36.v02
+        'CTRL-1078031',  -- AC-3.AWS.36.v02
+        'CTRL-1100340'   -- AC-3.AWS.91.v01
     )

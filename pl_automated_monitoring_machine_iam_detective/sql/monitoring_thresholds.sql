@@ -15,4 +15,7 @@ from
     etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
 where 
     metric_threshold_end_date is null
-    and control_id = 'CTRL-1074653'
+    and control_id in (
+        'CTRL-1074653',  -- AC-3.AWS.39.v02
+        'CTRL-1104500'   -- AC-3.AWS.91.v01
+    )

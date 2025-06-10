@@ -10,10 +10,10 @@ environments:
         connector: snowflake
         options:
           sql: "@text:sql/monitoring_thresholds.sql"
-      symantec_proxy_outcome:
+      apr_microcertification_metrics:
         connector: snowflake
         options:
-          sql: "@text:sql/symantec_proxy_outcome.sql"
+          sql: "@text:sql/apr_microcertification_metrics.sql"
     load:
       monitoring_metrics:
         - connector: onestream
@@ -29,10 +29,10 @@ environments:
         connector: snowflake
         options:
           sql: "@text:sql/monitoring_thresholds.sql"
-      symantec_proxy_outcome:
+      apr_microcertification_metrics:
         connector: snowflake
         options:
-          sql: "@text:sql/symantec_proxy_outcome.sql"
+          sql: "@text:sql/apr_microcertification_metrics.sql"
     load:
       monitoring_metrics:
         - connector: onestream
@@ -73,33 +73,33 @@ ingress_validation:
         check_type: "data_freshness"
         description: "Ingress data quality check"
 
-  symantec_proxy_outcome:
+  apr_microcertification_metrics:
     - type: schema_check
       fatal: false
       informational: true
       envs: [local, prod]
       options:
         required_columns:
-          - TEST_ID
-          - TEST_NAME
-          - PLATFORM
-          - EXPECTED_OUTCOME
-          - ACTUAL_OUTCOME
-          - TEST_DESCRIPTION
-          - SF_LOAD_TIMESTAMP
+          - date
+          - ctrl_id
+          - metric_tier
+          - monitoring_metric
+          - compliance_status
+          - numerator
+          - denominator
+          - metric_description
     - type: count_check
-      fatal: false
-      informational: true
+      fatal: true
       envs: [local, prod]
       options:
         data_location: Snowflake
-        threshold: 1
+        threshold: 4
     - type: consistency_check
       fatal: false
       informational: true
       envs: [local, prod]
       options:
-        description: "Symantec Proxy outcome data quality check"
+        description: "APR microcertification metrics data quality check"
 
 egress_validation:
   monitoring_metrics:
@@ -125,4 +125,4 @@ egress_validation:
       informational: true
       envs: [local, prod]
       options:
-        description: "Egress data will not match ingress data due to metric calculations"
+        description: "Egress data will not match ingress data due to APR metric processing"

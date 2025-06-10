@@ -133,7 +133,7 @@ class PLAutomatedMonitoringCTRL1077188(ConfigPipeline):
             except Exception as e:
                 raise RuntimeError(f"Failed to fetch resources from API: {str(e)}")
         
-        # Step 4: Filter in-scope certificates (exclude orphaned and pending deletion/import)
+        # Step 4: Filter in-scope certificates and extract usage info
         in_scope_resources = []
         for resource in all_resources:
             # Check for orphaned certificates (source = CT-AccessDenied)
@@ -142,14 +142,26 @@ class PLAutomatedMonitoringCTRL1077188(ConfigPipeline):
                 
             # Check status from configuration
             status = None
+            in_use_by = None
+            not_after = None
+            
             for config in resource.get('configurationList', []):
-                if config.get('configurationName') == 'status':
+                config_name = config.get('configurationName')
+                if config_name == 'status':
                     status = config.get('configurationValue')
-                    break
+                elif config_name == 'inUseBy':
+                    in_use_by = config.get('configurationValue')
+                elif config_name == 'notAfter':
+                    not_after = config.get('configurationValue')
             
             # Exclude certificates in pending states
             if status in ['PENDING_DELETION', 'PENDING_IMPORT']:
                 continue
+            
+            # Add usage and expiration info to resource
+            resource['parsed_in_use_by'] = in_use_by
+            resource['parsed_not_after'] = not_after
+            resource['is_in_use'] = in_use_by != "[]" if in_use_by is not None else True
                 
             in_scope_resources.append(resource)
         
@@ -194,7 +206,7 @@ class PLAutomatedMonitoringCTRL1077188(ConfigPipeline):
                     non_compliant_resources = None
                     
             elif tier == "Tier 2":
-                # Tier 2: Certificate rotation compliance - Check dataset for proper rotation
+                # Tier 2: Certificate rotation compliance - Enhanced with expiration warnings and unused expired certs
                 if dataset_certificates.empty:
                     metric_value = 0.0
                     compliant_count = 0
@@ -202,9 +214,21 @@ class PLAutomatedMonitoringCTRL1077188(ConfigPipeline):
                     non_compliant_resources = [json.dumps({"issue": "No certificates found in dataset"})]
                 else:
                     non_compliant_certs = []
+                    warning_certs = []
+                    
+                    # Create a mapping of API resources by ARN for usage lookup
+                    api_resource_map = {}
+                    for resource in in_scope_resources:
+                        arn = resource.get('amazonResourceName', '').lower()
+                        if arn:
+                            api_resource_map[arn] = resource
                     
                     for _, cert in dataset_certificates.iterrows():
                         issues = []
+                        cert_arn = cert['certificate_arn'].lower() if pd.notna(cert['certificate_arn']) else ''
+                        
+                        # Get API resource data for this certificate
+                        api_resource = api_resource_map.get(cert_arn)
                         
                         # Check if certificate is used after expiration
                         if (pd.notna(cert['last_usage_observation_utc_timestamp']) and 
@@ -219,6 +243,25 @@ class PLAutomatedMonitoringCTRL1077188(ConfigPipeline):
                             if lifetime_days > 395:  # 13 months
                                 issues.append(f"Lifetime ({lifetime_days} days) exceeds 395 days")
                         
+                        # NEW: Check for 30-day expiration warning
+                        if pd.notna(cert['not_valid_after_utc_timestamp']):
+                            days_until_expiry = (cert['not_valid_after_utc_timestamp'] - now).days
+                            if 0 <= days_until_expiry <= 30:
+                                warning_certs.append({
+                                    'arn': cert['certificate_arn'],
+                                    'days_until_expiry': days_until_expiry,
+                                    'expiry_date': cert['not_valid_after_utc_timestamp'].isoformat()
+                                })
+                        
+                        # NEW: Check for expired unused certificates (24+ hours after expiration)
+                        if (pd.notna(cert['not_valid_after_utc_timestamp']) and 
+                            cert['not_valid_after_utc_timestamp'] < now):
+                            hours_since_expiry = (now - cert['not_valid_after_utc_timestamp']).total_seconds() / 3600
+                            
+                            # Check if certificate is not in use from API data
+                            if api_resource and not api_resource.get('is_in_use', True) and hours_since_expiry >= 24:
+                                issues.append(f"Expired unused certificate ({int(hours_since_expiry)} hours since expiry)")
+                        
                         if issues:
                             non_compliant_certs.append({
                                 'arn': cert['certificate_arn'],
@@ -229,25 +272,63 @@ class PLAutomatedMonitoringCTRL1077188(ConfigPipeline):
                     total_count = len(dataset_certificates)
                     metric_value = round((compliant_count / total_count * 100), 2) if total_count > 0 else 0.0
                     
-                    # Format non-compliant resources
+                    # Format non-compliant resources (include warnings in resources_info)
+                    all_issues = []
                     if non_compliant_certs:
-                        non_compliant_list = non_compliant_certs[:100]  # Limit to 100
-                        non_compliant_resources = [json.dumps(cert) for cert in non_compliant_list]
-                        if len(non_compliant_certs) > 100:
-                            non_compliant_resources.append(json.dumps({"message": f"... and {len(non_compliant_certs) - 100} more"}))
+                        all_issues.extend(non_compliant_certs[:100])
+                    if warning_certs:
+                        for warning_cert in warning_certs[:50]:  # Limit warnings
+                            all_issues.append({
+                                'arn': warning_cert['arn'],
+                                'warning': f"Expires in {warning_cert['days_until_expiry']} days",
+                                'expiry_date': warning_cert['expiry_date']
+                            })
+                    
+                    if all_issues:
+                        non_compliant_resources = [json.dumps(issue) for issue in all_issues]
+                        if len(non_compliant_certs) + len(warning_certs) > 150:
+                            non_compliant_resources.append(json.dumps({"message": f"... and more issues"}))
                     else:
                         non_compliant_resources = None
             
-            # Determine compliance status
+            # Determine compliance status with enhanced logic for warnings and expired certificates
             alert_threshold = threshold.get("alerting_threshold", 100.0)
             warning_threshold = threshold.get("warning_threshold")
             
-            if metric_value >= alert_threshold:
-                compliance_status = "Green"
-            elif warning_threshold is not None and metric_value >= warning_threshold:
-                compliance_status = "Yellow"
+            # Special logic for Tier 2 - check for warnings and expired unused certificates
+            if tier == "Tier 2" and not dataset_certificates.empty:
+                has_warnings = len(warning_certs) > 0 if 'warning_certs' in locals() else False
+                has_expired_unused = False
+                
+                # Check if any issues include expired unused certificates
+                if 'non_compliant_certs' in locals():
+                    for cert in non_compliant_certs:
+                        for issue in cert.get('issues', []):
+                            if 'Expired unused certificate' in issue:
+                                has_expired_unused = True
+                                break
+                        if has_expired_unused:
+                            break
+                
+                # Status determination with new logic
+                if has_expired_unused:
+                    compliance_status = "Red"  # Red for expired unused certificates after 24 hours
+                elif has_warnings and metric_value >= alert_threshold:
+                    compliance_status = "Yellow"  # Yellow for 30-day expiration warnings
+                elif metric_value >= alert_threshold:
+                    compliance_status = "Green"
+                elif warning_threshold is not None and metric_value >= warning_threshold:
+                    compliance_status = "Yellow"
+                else:
+                    compliance_status = "Red"
             else:
-                compliance_status = "Red"
+                # Standard threshold-based logic for other tiers
+                if metric_value >= alert_threshold:
+                    compliance_status = "Green"
+                elif warning_threshold is not None and metric_value >= warning_threshold:
+                    compliance_status = "Yellow"
+                else:
+                    compliance_status = "Red"
             
             # Step 6: Format Output with Standard Fields
             result = {

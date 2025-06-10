@@ -215,7 +215,7 @@ def test_pipeline_initialization():
 
 def test_control_configs_structure():
     """Test that all control configurations are properly structured"""
-    assert len(CONTROL_CONFIGS) == 11  # Should have 11 controls
+    assert len(CONTROL_CONFIGS) == 12  # Should have 12 controls (including CTRL-1100340)
     
     for config in CONTROL_CONFIGS:
         assert "cloud_control_id" in config

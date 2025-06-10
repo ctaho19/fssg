@@ -111,6 +111,30 @@ def _mock_evaluated_accounts():
     ])
 
 
+def _mock_in_scope_asvs():
+    """Generate mock in-scope ASVs data based on complex criteria"""
+    return pd.DataFrame([
+        {"ASV": "ASV001"},
+        {"ASV": "ASV002"},
+        {"ASV": "ASV003"},
+        {"ASV": "ASV004"},  # This one is in scope but not in microcertification
+        {"ASV": "ASV005"},
+        {"ASV": "ASV006"},
+        {"ASV": "ASV007"},  # This one is also in scope but not in microcertification
+    ])
+
+
+def _mock_microcertification_asvs():
+    """Generate mock microcertification ASVs data"""
+    return pd.DataFrame([
+        {"ASV": "ASV001"},
+        {"ASV": "ASV002"},
+        {"ASV": "ASV003"},
+        {"ASV": "ASV005"},  # ASV004 is missing (not in microcertification)
+        {"ASV": "ASV006"},
+    ])
+
+
 def generate_mock_api_response(content=None, status_code=200):
     """Generate standardized mock API response."""
     import json
@@ -135,10 +159,12 @@ def test_calculate_metrics_multi_control_success():
     # Setup test data
     thresholds_df = _mock_multi_control_thresholds()
     in_scope_accounts_df = _mock_in_scope_accounts()
+    in_scope_asvs_df = _mock_in_scope_asvs()
+    microcertification_asvs_df = _mock_microcertification_asvs()
     evaluated_accounts_df = _mock_evaluated_accounts()
     
     # Call _calculate_metrics directly
-    result = pipeline._calculate_metrics(thresholds_df, in_scope_accounts_df, evaluated_accounts_df)
+    result = pipeline._calculate_metrics(thresholds_df, in_scope_accounts_df, in_scope_asvs_df, microcertification_asvs_df, evaluated_accounts_df)
     
     # Assertions
     assert isinstance(result, pd.DataFrame)
@@ -207,10 +233,12 @@ def test_calculate_metrics_empty_thresholds():
     
     empty_df = pd.DataFrame()
     in_scope_accounts_df = _mock_in_scope_accounts()
+    in_scope_asvs_df = _mock_in_scope_asvs()
+    microcertification_asvs_df = _mock_microcertification_asvs()
     evaluated_accounts_df = _mock_evaluated_accounts()
     
     with pytest.raises(RuntimeError, match="No threshold data found"):
-        pipeline._calculate_metrics(empty_df, in_scope_accounts_df, evaluated_accounts_df)
+        pipeline._calculate_metrics(empty_df, in_scope_accounts_df, in_scope_asvs_df, microcertification_asvs_df, evaluated_accounts_df)
 
 
 def test_calculate_metrics_empty_accounts():
@@ -220,10 +248,12 @@ def test_calculate_metrics_empty_accounts():
     
     thresholds_df = _mock_multi_control_thresholds()
     empty_accounts_df = pd.DataFrame()
+    in_scope_asvs_df = _mock_in_scope_asvs()
+    microcertification_asvs_df = _mock_microcertification_asvs()
     evaluated_accounts_df = _mock_evaluated_accounts()
     
     with pytest.raises(RuntimeError, match="No in-scope accounts found"):
-        pipeline._calculate_metrics(thresholds_df, empty_accounts_df, evaluated_accounts_df)
+        pipeline._calculate_metrics(thresholds_df, empty_accounts_df, in_scope_asvs_df, microcertification_asvs_df, evaluated_accounts_df)
 
 
 def test_pipeline_initialization():
@@ -264,11 +294,15 @@ def test_extract_method_integration():
     # Mock super().extract() to return test data (as Series containing DataFrames)
     mock_thresholds = _mock_multi_control_thresholds()
     mock_accounts = _mock_in_scope_accounts()
+    mock_asvs = _mock_in_scope_asvs()
+    mock_microcert_asvs = _mock_microcertification_asvs()
     mock_evaluations = _mock_evaluated_accounts()
     
     mock_df = pd.DataFrame({
         "thresholds_raw": [mock_thresholds],
         "in_scope_accounts": [mock_accounts],
+        "in_scope_asvs": [mock_asvs],
+        "microcertification_asvs": [mock_microcert_asvs],
         "evaluated_accounts": [mock_evaluations]
     })
     
@@ -321,12 +355,14 @@ def test_compliance_status_determination():
     
     # All accounts evaluated (100% coverage)
     in_scope_accounts_df = _mock_in_scope_accounts()[:1]
+    in_scope_asvs_df = _mock_in_scope_asvs()
+    microcertification_asvs_df = _mock_microcertification_asvs()
     evaluated_accounts_df = pd.DataFrame([
         {"RESOURCE_ID": "123456789012", "RESOURCE_TYPE": "Account",
          "COMPLIANCE_STATUS": "Compliant", "CONTROL_ID": "AC-3.AWS.146.v02"}
     ])
     
-    result = pipeline._calculate_metrics(thresholds_df, in_scope_accounts_df, evaluated_accounts_df)
+    result = pipeline._calculate_metrics(thresholds_df, in_scope_accounts_df, in_scope_asvs_df, microcertification_asvs_df, evaluated_accounts_df)
     
     # 100% coverage should be Green (>= 97% warning threshold)
     assert result.iloc[0]["monitoring_metric_value"] == 100.0

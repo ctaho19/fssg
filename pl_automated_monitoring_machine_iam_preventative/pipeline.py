@@ -109,6 +109,15 @@ CONTROL_CONFIGS = [
             "tier2": "MNTR-1078031-T2"
         },
         "requires_tier3": False
+    },
+    {
+        "cloud_control_id": "AC-3.AWS.91.v01",
+        "ctrl_id": "CTRL-1100340",
+        "metric_ids": {
+            "tier1": "MNTR-1100340-T1",
+            "tier2": "MNTR-1100340-T2"
+        },
+        "requires_tier3": False
     }
 ]
 
