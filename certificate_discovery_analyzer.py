@@ -706,6 +706,132 @@ class CertificateDiscoveryAnalyzer:
         logger.info(f"Generated {len(mock_certs)} mock certificates")
         return mock_certs
 
+    def analyze_specific_certificates(self, test_arns: List[str]) -> Dict:
+        """
+        Analyze specific certificate ARNs for detailed inspection
+        
+        PASTE YOUR EXAMPLE ARNs HERE FOR TESTING:
+        
+        # DigiCert example ARN - replace with your real ARN:
+        # arn:aws:acm:region:account:certificate/PASTE_DIGICERT_ARN_HERE
+        
+        # AWS Private CA example ARN - replace with your real ARN:
+        # arn:aws:acm:region:account:certificate/PASTE_PRIVATE_CA_ARN_HERE
+        
+        Args:
+            test_arns: List of specific certificate ARNs to analyze
+            
+        Returns:
+            Dictionary with detailed analysis of these specific certificates
+        """
+        if not test_arns:
+            logger.info("No specific ARNs provided for analysis")
+            return {}
+        
+        logger.info(f"Analyzing {len(test_arns)} specific certificate ARNs...")
+        
+        # Find these specific certificates in our discovered set
+        target_certificates = []
+        for cert in self.certificates:
+            if cert.arn.lower() in [arn.lower() for arn in test_arns]:
+                target_certificates.append(cert)
+        
+        if not target_certificates:
+            logger.warning("None of the specified ARNs were found in the discovered certificates")
+            return {"found_certificates": [], "analysis": "No matching certificates found"}
+        
+        logger.info(f"Found {len(target_certificates)} matching certificates")
+        
+        # Detailed analysis of these specific certificates
+        analysis = {
+            "found_certificates": len(target_certificates),
+            "requested_arns": test_arns,
+            "detailed_analysis": []
+        }
+        
+        for cert in target_certificates:
+            cert_analysis = {
+                "arn": cert.arn,
+                "certificate_id": cert.certificate_id,
+                "issuer": cert.issuer,
+                "issuer_category": cert.issuer_category,
+                "status": cert.status,
+                "domain_name": cert.domain_name,
+                "subject_alternative_names": cert.subject_alternative_names,
+                "region": cert.region,
+                "account_id": cert.account_id,
+                "is_in_use": cert.is_in_use,
+                "in_use_by": cert.in_use_by,
+                "in_use_by_count": len(cert.in_use_by),
+                "source": cert.source,
+                "not_before": cert.not_before.isoformat() if cert.not_before else None,
+                "not_after": cert.not_after.isoformat() if cert.not_after else None,
+                "days_until_expiry": cert.days_until_expiry,
+                "is_expired": cert.is_expired,
+                "expiry_category": cert.expiry_category,
+                
+                # Analysis insights
+                "scope_recommendation": self._get_scope_recommendation(cert),
+                "monitoring_priority": self._get_monitoring_priority(cert),
+                "risk_assessment": self._get_risk_assessment(cert)
+            }
+            
+            analysis["detailed_analysis"].append(cert_analysis)
+        
+        return analysis
+    
+    def _get_scope_recommendation(self, cert: CertificateInfo) -> str:
+        """Provide scope recommendation for a certificate"""
+        if cert.issuer_category == "Amazon":
+            return "ALREADY_IN_SCOPE - Amazon certificates currently monitored"
+        elif cert.issuer_category == "DigiCert":
+            if cert.is_in_use:
+                return "RECOMMENDED_FOR_SCOPE - DigiCert cert in active use"
+            else:
+                return "CONSIDER_FOR_SCOPE - DigiCert cert not currently in use"
+        elif cert.issuer_category == "AWS_Private_CA":
+            if cert.is_in_use:
+                return "RECOMMENDED_FOR_SCOPE - Private CA cert in active use"
+            else:
+                return "CONSIDER_FOR_SCOPE - Private CA cert not currently in use"
+        elif cert.issuer_category == "LetsEncrypt":
+            return "EVALUATE_NEEDED - Let's Encrypt certificates may be short-lived"
+        else:
+            return f"EVALUATE_NEEDED - {cert.issuer_category} certificates need assessment"
+    
+    def _get_monitoring_priority(self, cert: CertificateInfo) -> str:
+        """Determine monitoring priority"""
+        if cert.is_expired:
+            return "CRITICAL - Certificate has expired"
+        elif cert.days_until_expiry and cert.days_until_expiry <= 30:
+            return "HIGH - Expires within 30 days"
+        elif cert.days_until_expiry and cert.days_until_expiry <= 90:
+            return "MEDIUM - Expires within 90 days"
+        elif cert.is_in_use:
+            return "MEDIUM - Certificate is in active use"
+        else:
+            return "LOW - Certificate not in use"
+    
+    def _get_risk_assessment(self, cert: CertificateInfo) -> str:
+        """Assess certificate risk"""
+        risks = []
+        
+        if cert.is_expired and cert.is_in_use:
+            risks.append("EXPIRED_IN_USE")
+        elif cert.is_expired:
+            risks.append("EXPIRED_UNUSED")
+            
+        if cert.days_until_expiry and cert.days_until_expiry <= 30 and cert.is_in_use:
+            risks.append("EXPIRING_SOON_IN_USE")
+            
+        if not cert.is_in_use and cert.days_until_expiry and cert.days_until_expiry > 30:
+            risks.append("UNUSED_VALID")
+            
+        if cert.issuer_category == "Other":
+            risks.append("UNKNOWN_ISSUER")
+            
+        return "; ".join(risks) if risks else "LOW_RISK"
+
 def main():
     """Main function with command-line interface"""
     parser = argparse.ArgumentParser(
@@ -726,6 +852,8 @@ def main():
                        help="Enable verbose logging")
     parser.add_argument("--dry-run", action="store_true",
                        help="Analyze without making API calls (for testing)")
+    parser.add_argument("--analyze-specific", nargs="+",
+                       help="Analyze specific certificate ARNs (paste your DigiCert/PCA examples here)")
     
     args = parser.parse_args()
     
@@ -761,6 +889,40 @@ def main():
         # Generate analysis report
         include_comparison = args.compare_catalog and args.catalog_csv
         report = analyzer.generate_analysis_report(include_catalog_comparison=include_comparison)
+        
+        # Analyze specific certificates if requested
+        if args.analyze_specific:
+            logger.info(f"Analyzing {len(args.analyze_specific)} specific certificate ARNs...")
+            specific_analysis = analyzer.analyze_specific_certificates(args.analyze_specific)
+            
+            if specific_analysis and specific_analysis.get("detailed_analysis"):
+                print("\n" + "="*80)
+                print("SPECIFIC CERTIFICATE ANALYSIS")
+                print("="*80)
+                
+                for i, cert_analysis in enumerate(specific_analysis["detailed_analysis"], 1):
+                    print(f"\n🔍 CERTIFICATE {i}:")
+                    print(f"ARN: {cert_analysis['arn']}")
+                    print(f"Issuer: {cert_analysis['issuer']}")
+                    print(f"Category: {cert_analysis['issuer_category']}")
+                    print(f"Status: {cert_analysis['status']}")
+                    print(f"Domain: {cert_analysis['domain_name']}")
+                    print(f"In Use: {cert_analysis['is_in_use']} ({cert_analysis['in_use_by_count']} resources)")
+                    print(f"Expires: {cert_analysis['not_after']} ({cert_analysis['days_until_expiry']} days)")
+                    print(f"Scope Recommendation: {cert_analysis['scope_recommendation']}")
+                    print(f"Monitoring Priority: {cert_analysis['monitoring_priority']}")
+                    print(f"Risk Assessment: {cert_analysis['risk_assessment']}")
+                    
+                    if cert_analysis['subject_alternative_names']:
+                        print(f"SANs: {', '.join(cert_analysis['subject_alternative_names'])}")
+                    
+                    if cert_analysis['in_use_by']:
+                        print(f"Used by: {cert_analysis['in_use_by'][:2]}...")  # Show first 2 resources
+                
+                # Add specific analysis to report
+                report["specific_certificate_analysis"] = specific_analysis
+            else:
+                logger.warning("No matching certificates found for the specified ARNs")
         
         # Print summary
         analyzer.print_summary_report(report)
