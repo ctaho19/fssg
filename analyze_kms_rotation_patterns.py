@@ -277,11 +277,25 @@ class KMSRotationAnalyzer:
             tag_patterns = defaultdict(int)
             tag_values = defaultdict(list)
             for key in rotation_false_keys:
-                tags = key.get("tags", {})
-                for tag_key, tag_value in tags.items():
-                    tag_patterns[tag_key] += 1
-                    if tag_value and len(tag_values[tag_key]) < 10:  # Limit examples
-                        tag_values[tag_key].append(tag_value)
+                tags = key.get("tags", [])
+                
+                # Handle both list and dict formats for tags
+                if isinstance(tags, list):
+                    # Tags are in list format: [{"key": "TagName", "value": "TagValue"}, ...]
+                    for tag in tags:
+                        if isinstance(tag, dict) and "key" in tag:
+                            tag_key = tag.get("key", "")
+                            tag_value = tag.get("value", "")
+                            if tag_key:
+                                tag_patterns[tag_key] += 1
+                                if tag_value and len(tag_values[tag_key]) < 10:  # Limit examples
+                                    tag_values[tag_key].append(tag_value)
+                elif isinstance(tags, dict):
+                    # Tags are in dict format: {"TagName": "TagValue", ...}
+                    for tag_key, tag_value in tags.items():
+                        tag_patterns[tag_key] += 1
+                        if tag_value and len(tag_values[tag_key]) < 10:  # Limit examples
+                            tag_values[tag_key].append(tag_value)
             
             patterns["patterns"]["common_tags"] = dict(tag_patterns.most_common(20))
             patterns["patterns"]["tag_value_examples"] = {k: list(set(v)) for k, v in tag_values.items() if len(v) > 1}
@@ -433,8 +447,26 @@ class KMSRotationAnalyzer:
                 print(f"  Multi-Region: {key.get('multiRegion')}")
                 print(f"  Description: {key.get('description', 'N/A')}")
                 print(f"  Aliases: {', '.join(key.get('aliases', [])) if key.get('aliases') else 'None'}")
-                if key.get('tags'):
-                    print(f"  Tags: {', '.join(f'{k}={v}' for k, v in key.get('tags', {}).items())}")
+                
+                # Handle tags display for both list and dict formats
+                tags = key.get('tags', [])
+                if tags:
+                    tag_strings = []
+                    if isinstance(tags, list):
+                        # Tags in list format
+                        for tag in tags:
+                            if isinstance(tag, dict) and "key" in tag:
+                                tag_key = tag.get("key", "")
+                                tag_value = tag.get("value", "")
+                                tag_strings.append(f"{tag_key}={tag_value}")
+                    elif isinstance(tags, dict):
+                        # Tags in dict format
+                        tag_strings = [f"{k}={v}" for k, v in tags.items()]
+                    
+                    if tag_strings:
+                        print(f"  Tags: {', '.join(tag_strings)}")
+                    else:
+                        print(f"  Tags: None")
         
         print("\n" + "="*80)
         print("RECOMMENDATIONS FOR EXCLUSION CRITERIA:")
