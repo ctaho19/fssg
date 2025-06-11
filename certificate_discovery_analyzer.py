@@ -832,6 +832,360 @@ class CertificateDiscoveryAnalyzer:
             
         return "; ".join(risks) if risks else "LOW_RISK"
 
+    def analyze_certificate_metadata_by_type(self) -> Dict:
+        """
+        Analyze certificate metadata structure by issuer type for pipeline development
+        
+        REFERENCE EXAMPLE ARNs FOR DETAILED ANALYSIS:
+        
+        # DigiCert example ARN - PASTE YOUR REAL ARN HERE:
+        # digicert_example_arn = "arn:aws:acm:region:account:certificate/PASTE_DIGICERT_ARN_HERE"
+        
+        # AWS Private CA example ARN - PASTE YOUR REAL ARN HERE:
+        # pca_example_arn = "arn:aws:acm:region:account:certificate/PASTE_PCA_ARN_HERE"
+        
+        Returns:
+            Dictionary containing detailed metadata analysis by certificate type
+        """
+        if not self.certificates:
+            logger.warning("No certificates available for metadata analysis")
+            return {}
+        
+        logger.info("Analyzing certificate metadata structure by issuer type...")
+        
+        # Group certificates by issuer category
+        certificates_by_type = {}
+        for cert in self.certificates:
+            cert_type = cert.issuer_category
+            if cert_type not in certificates_by_type:
+                certificates_by_type[cert_type] = []
+            certificates_by_type[cert_type].append(cert)
+        
+        metadata_analysis = {
+            "analysis_timestamp": datetime.now().isoformat(),
+            "total_certificates_analyzed": len(self.certificates),
+            "certificate_type_summary": {},
+            "detailed_metadata_analysis": {},
+            "pipeline_integration_recommendations": {},
+            "reference_examples": {}
+        }
+        
+        # Analyze each certificate type
+        for cert_type, certs in certificates_by_type.items():
+            logger.info(f"Analyzing {len(certs)} {cert_type} certificates...")
+            
+            # Basic statistics
+            metadata_analysis["certificate_type_summary"][cert_type] = {
+                "count": len(certs),
+                "percentage": round(len(certs) / len(self.certificates) * 100, 1),
+                "in_use_count": sum(1 for cert in certs if cert.is_in_use),
+                "usage_percentage": round(sum(1 for cert in certs if cert.is_in_use) / len(certs) * 100, 1)
+            }
+            
+            # Detailed metadata structure analysis
+            metadata_analysis["detailed_metadata_analysis"][cert_type] = self._analyze_certificate_type_metadata(certs)
+            
+            # Pipeline integration recommendations
+            metadata_analysis["pipeline_integration_recommendations"][cert_type] = self._generate_pipeline_recommendations(cert_type, certs)
+            
+            # Find reference examples (first few certificates of this type)
+            examples = []
+            for cert in certs[:3]:  # Get up to 3 examples
+                examples.append({
+                    "arn": cert.arn,
+                    "issuer": cert.issuer,
+                    "domain_name": cert.domain_name,
+                    "is_in_use": cert.is_in_use,
+                    "days_until_expiry": cert.days_until_expiry
+                })
+            metadata_analysis["reference_examples"][cert_type] = examples
+        
+        return metadata_analysis
+    
+    def _analyze_certificate_type_metadata(self, certs: List[CertificateInfo]) -> Dict:
+        """Analyze metadata structure for a specific certificate type"""
+        # This would need access to the raw API response data
+        # For now, we'll analyze what we can from the CertificateInfo objects
+        
+        metadata_fields = {
+            "issuer_patterns": {},
+            "domain_patterns": {},
+            "usage_patterns": {},
+            "expiration_patterns": {},
+            "availability_analysis": {}
+        }
+        
+        # Analyze issuer patterns
+        issuers = [cert.issuer for cert in certs if cert.issuer]
+        issuer_count = {}
+        for issuer in issuers:
+            issuer_count[issuer] = issuer_count.get(issuer, 0) + 1
+        metadata_fields["issuer_patterns"] = dict(sorted(issuer_count.items(), key=lambda x: x[1], reverse=True)[:10])
+        
+        # Analyze domain patterns
+        domains = [cert.domain_name for cert in certs if cert.domain_name]
+        domain_suffixes = {}
+        for domain in domains:
+            if '.' in domain:
+                suffix = '.' + domain.split('.')[-1]
+                domain_suffixes[suffix] = domain_suffixes.get(suffix, 0) + 1
+        metadata_fields["domain_patterns"] = dict(sorted(domain_suffixes.items(), key=lambda x: x[1], reverse=True)[:10])
+        
+        # Analyze usage patterns
+        in_use_count = sum(1 for cert in certs if cert.is_in_use)
+        metadata_fields["usage_patterns"] = {
+            "total_certificates": len(certs),
+            "in_use": in_use_count,
+            "unused": len(certs) - in_use_count,
+            "usage_rate": round(in_use_count / len(certs) * 100, 1) if certs else 0
+        }
+        
+        # Analyze expiration patterns
+        expiry_categories = {}
+        for cert in certs:
+            category = cert.expiry_category or "Unknown"
+            expiry_categories[category] = expiry_categories.get(category, 0) + 1
+        metadata_fields["expiration_patterns"] = expiry_categories
+        
+        # Field availability analysis
+        metadata_fields["availability_analysis"] = {
+            "issuer_present": sum(1 for cert in certs if cert.issuer) / len(certs) * 100,
+            "domain_present": sum(1 for cert in certs if cert.domain_name) / len(certs) * 100,
+            "expiry_date_present": sum(1 for cert in certs if cert.not_after) / len(certs) * 100,
+            "sans_present": sum(1 for cert in certs if cert.subject_alternative_names) / len(certs) * 100,
+            "usage_info_present": sum(1 for cert in certs if cert.in_use_by) / len(certs) * 100
+        }
+        
+        return metadata_fields
+    
+    def _generate_pipeline_recommendations(self, cert_type: str, certs: List[CertificateInfo]) -> Dict:
+        """Generate pipeline integration recommendations for a certificate type"""
+        recommendations = {
+            "api_filter_criteria": {},
+            "identification_logic": {},
+            "monitoring_considerations": {},
+            "comparison_fields": {}
+        }
+        
+        if cert_type == "Amazon":
+            recommendations["api_filter_criteria"] = {
+                "current_filter": "configurationItems: [{configurationName: 'issuer', configurationValue: 'Amazon'}]",
+                "reliability": "High - Amazon certificates consistently have 'Amazon' in issuer field"
+            }
+            recommendations["identification_logic"] = {
+                "primary": "issuer contains 'Amazon'",
+                "backup": "Check for Amazon-specific certificate characteristics"
+            }
+            recommendations["monitoring_considerations"] = {
+                "strengths": ["Consistent metadata structure", "Good tag usage for ASV/BA identification"],
+                "limitations": ["May miss certificates issued by other Amazon CAs"]
+            }
+            
+        elif cert_type == "DigiCert":
+            recommendations["api_filter_criteria"] = {
+                "suggested_filter": "configurationItems: [{configurationName: 'issuer', configurationValue: 'DigiCert'}]",
+                "reliability": "High - DigiCert certificates have distinctive issuer patterns"
+            }
+            recommendations["identification_logic"] = {
+                "primary": "issuer contains 'DigiCert'",
+                "patterns": [issuer for issuer in set(cert.issuer for cert in certs[:5] if cert.issuer)]
+            }
+            recommendations["monitoring_considerations"] = {
+                "strengths": ["Clear issuer identification", "Commercial certificate standards"],
+                "limitations": ["May have different metadata structure than Amazon certificates"]
+            }
+            
+        elif cert_type == "AWS_Private_CA":
+            recommendations["api_filter_criteria"] = {
+                "suggested_approach": "Use negative filtering (exclude Amazon and DigiCert) or search for Private CA patterns",
+                "reliability": "Medium - Requires custom identification logic"
+            }
+            recommendations["identification_logic"] = {
+                "primary": "Check for Private CA patterns in issuer",
+                "secondary": "Look for certificateAuthorityArn in supplementaryConfiguration"
+            }
+            recommendations["monitoring_considerations"] = {
+                "strengths": ["Internal certificate control", "Custom CA policies"],
+                "limitations": ["Variable issuer names", "May require custom parsing logic"]
+            }
+            
+        else:
+            recommendations["api_filter_criteria"] = {
+                "approach": "Requires investigation of specific issuer patterns"
+            }
+            recommendations["identification_logic"] = {
+                "primary": f"issuer contains specific {cert_type} patterns"
+            }
+        
+        # Common comparison fields analysis
+        sample_certs = certs[:10]  # Analyze first 10 certificates
+        field_availability = {
+            "issuer": sum(1 for cert in sample_certs if cert.issuer) / len(sample_certs) * 100,
+            "status": sum(1 for cert in sample_certs if cert.status) / len(sample_certs) * 100,
+            "domain_name": sum(1 for cert in sample_certs if cert.domain_name) / len(sample_certs) * 100,
+            "in_use_by": sum(1 for cert in sample_certs if cert.in_use_by) / len(sample_certs) * 100,
+            "expiry_dates": sum(1 for cert in sample_certs if cert.not_after) / len(sample_certs) * 100
+        }
+        
+        recommendations["comparison_fields"] = {
+            "reliable_fields": [field for field, availability in field_availability.items() if availability >= 90],
+            "field_availability": field_availability,
+            "recommended_for_pipeline": ["issuer", "status", "domain_name", "in_use_by", "not_after"]
+        }
+        
+        return recommendations
+    
+    def print_metadata_analysis_report(self, analysis: Dict) -> None:
+        """Print detailed metadata analysis report for pipeline development"""
+        if not analysis:
+            print("No metadata analysis data available")
+            return
+        
+        print("\n" + "="*100)
+        print("CERTIFICATE METADATA STRUCTURE ANALYSIS FOR PIPELINE DEVELOPMENT")
+        print("="*100)
+        print(f"Analysis Timestamp: {analysis.get('analysis_timestamp')}")
+        print(f"Total Certificates Analyzed: {analysis.get('total_certificates_analyzed', 0):,}")
+        
+        # Certificate type summary
+        print(f"\n📊 CERTIFICATE TYPE DISTRIBUTION")
+        print("-" * 50)
+        type_summary = analysis.get("certificate_type_summary", {})
+        for cert_type, stats in sorted(type_summary.items(), key=lambda x: x[1]['count'], reverse=True):
+            print(f"{cert_type:20s}: {stats['count']:,} certs ({stats['percentage']:.1f}%) - "
+                  f"{stats['in_use_count']:,} in use ({stats['usage_percentage']:.1f}%)")
+        
+        # Detailed analysis for each type
+        detailed_analysis = analysis.get("detailed_metadata_analysis", {})
+        pipeline_recs = analysis.get("pipeline_integration_recommendations", {})
+        
+        for cert_type in ["Amazon", "DigiCert", "AWS_Private_CA", "LetsEncrypt", "Other"]:
+            if cert_type not in detailed_analysis:
+                continue
+                
+            if cert_type == "Amazon":
+                icon = "🟢"
+            elif cert_type == "DigiCert":
+                icon = "🔒"
+            elif cert_type == "AWS_Private_CA":
+                icon = "🏢"
+            elif cert_type == "LetsEncrypt":
+                icon = "🆓"
+            else:
+                icon = "❓"
+                
+            print(f"\n{icon} {cert_type.upper()} CERTIFICATES")
+            print("-" * 70)
+            
+            # Metadata structure
+            metadata = detailed_analysis[cert_type]
+            
+            print("📋 Issuer Patterns:")
+            for issuer, count in list(metadata.get("issuer_patterns", {}).items())[:3]:
+                print(f"  • {issuer[:60]}... ({count} certificates)")
+            
+            print("🌐 Domain Patterns:")
+            for domain, count in list(metadata.get("domain_patterns", {}).items())[:5]:
+                print(f"  • {domain}: {count} certificates")
+            
+            print("📈 Usage Analysis:")
+            usage = metadata.get("usage_patterns", {})
+            print(f"  • Total: {usage.get('total_certificates', 0)} certificates")
+            print(f"  • In Use: {usage.get('in_use', 0)} ({usage.get('usage_rate', 0):.1f}%)")
+            print(f"  • Unused: {usage.get('unused', 0)}")
+            
+            print("⏰ Expiration Analysis:")
+            for category, count in metadata.get("expiration_patterns", {}).items():
+                print(f"  • {category}: {count} certificates")
+            
+            print("🔍 Field Availability:")
+            availability = metadata.get("availability_analysis", {})
+            for field, percentage in availability.items():
+                status = "✓" if percentage >= 90 else "⚠" if percentage >= 50 else "✗"
+                print(f"  {status} {field.replace('_', ' ').title()}: {percentage:.1f}%")
+            
+            # Pipeline recommendations
+            if cert_type in pipeline_recs:
+                recs = pipeline_recs[cert_type]
+                print("🔧 Pipeline Integration:")
+                
+                if "api_filter_criteria" in recs:
+                    filter_info = recs["api_filter_criteria"]
+                    if "current_filter" in filter_info:
+                        print(f"  • Current Filter: {filter_info['current_filter']}")
+                    if "suggested_filter" in filter_info:
+                        print(f"  • Suggested Filter: {filter_info['suggested_filter']}")
+                    if "reliability" in filter_info:
+                        print(f"  • Reliability: {filter_info['reliability']}")
+                
+                if "identification_logic" in recs:
+                    id_logic = recs["identification_logic"]
+                    if "primary" in id_logic:
+                        print(f"  • Primary ID: {id_logic['primary']}")
+                    if "patterns" in id_logic:
+                        print(f"  • Issuer Patterns: {len(id_logic['patterns'])} unique patterns found")
+                
+                if "comparison_fields" in recs:
+                    fields = recs["comparison_fields"]
+                    reliable_fields = fields.get("reliable_fields", [])
+                    print(f"  • Reliable Fields: {', '.join(reliable_fields)}")
+        
+        # Pipeline integration summary
+        print(f"\n🔧 PIPELINE INTEGRATION RECOMMENDATIONS")
+        print("="*70)
+        
+        print("1. API PAYLOAD MODIFICATIONS:")
+        print("   • Remove current Amazon-only filter:")
+        print("     OLD: \"configurationValue\": \"Amazon\"")
+        print("   • Use broader search to capture all certificate types:")
+        print("     NEW: Remove configurationItems filter entirely")
+        
+        print("\n2. CERTIFICATE TYPE IDENTIFICATION:")
+        amazon_count = type_summary.get("Amazon", {}).get("count", 0)
+        digicert_count = type_summary.get("DigiCert", {}).get("count", 0)
+        pca_count = type_summary.get("AWS_Private_CA", {}).get("count", 0)
+        
+        print(f"   • Amazon ({amazon_count:,} certs): issuer contains 'Amazon'")
+        print(f"   • DigiCert ({digicert_count:,} certs): issuer contains 'DigiCert'")
+        print(f"   • AWS Private CA ({pca_count:,} certs): issuer contains 'Private CA' or custom patterns")
+        
+        print("\n3. SCOPE EXPANSION RECOMMENDATIONS:")
+        total_non_amazon = sum(stats['count'] for cert_type, stats in type_summary.items() if cert_type != "Amazon")
+        total_certs = analysis.get('total_certificates_analyzed', 0)
+        expansion_percentage = (total_non_amazon / total_certs * 100) if total_certs > 0 else 0
+        
+        print(f"   • Current scope: {amazon_count:,} Amazon certificates")
+        print(f"   • Potential expansion: {total_non_amazon:,} additional certificates ({expansion_percentage:.1f}% increase)")
+        print(f"   • High priority: DigiCert certificates (commercial SSL)")
+        print(f"   • Medium priority: AWS Private CA certificates (internal use)")
+        
+        print("\n4. IMPLEMENTATION PRIORITY:")
+        if digicert_count > 0:
+            digicert_usage = type_summary.get("DigiCert", {}).get("usage_percentage", 0)
+            print(f"   🔒 DigiCert: {digicert_count:,} certificates ({digicert_usage:.1f}% in use) - RECOMMENDED")
+        if pca_count > 0:
+            pca_usage = type_summary.get("AWS_Private_CA", {}).get("usage_percentage", 0)
+            print(f"   🏢 AWS Private CA: {pca_count:,} certificates ({pca_usage:.1f}% in use) - CONSIDER")
+        
+        other_types = [t for t in type_summary.keys() if t not in ["Amazon", "DigiCert", "AWS_Private_CA"]]
+        if other_types:
+            print(f"   ❓ Other types: {', '.join(other_types)} - EVALUATE INDIVIDUALLY")
+        
+        # Reference examples
+        print(f"\n📋 REFERENCE EXAMPLES FOR TESTING")
+        print("-" * 50)
+        examples = analysis.get("reference_examples", {})
+        for cert_type, type_examples in examples.items():
+            if cert_type in ["DigiCert", "AWS_Private_CA"]:  # Focus on expansion targets
+                print(f"\n{cert_type} Examples:")
+                for i, example in enumerate(type_examples[:2], 1):  # Show 2 examples
+                    print(f"  {i}. ARN: {example['arn']}")
+                    print(f"     Issuer: {example['issuer']}")
+                    print(f"     Domain: {example['domain_name']}")
+                    print(f"     In Use: {example['is_in_use']}")
+        
+        print("\n" + "="*100)
+
 def main():
     """Main function with command-line interface"""
     parser = argparse.ArgumentParser(
@@ -854,6 +1208,8 @@ def main():
                        help="Analyze without making API calls (for testing)")
     parser.add_argument("--analyze-specific", nargs="+",
                        help="Analyze specific certificate ARNs (paste your DigiCert/PCA examples here)")
+    parser.add_argument("--analyze-metadata", action="store_true",
+                       help="Analyze certificate metadata structure by type for pipeline development")
     
     args = parser.parse_args()
     
@@ -886,7 +1242,26 @@ def main():
             logger.warning("No certificates discovered")
             return 0
         
-        # Generate analysis report
+        # Perform metadata analysis if requested
+        if args.analyze_metadata:
+            logger.info("Performing certificate metadata analysis...")
+            metadata_analysis = analyzer.analyze_certificate_metadata_by_type()
+            
+            # Print detailed metadata analysis report
+            analyzer.print_metadata_analysis_report(metadata_analysis)
+            
+            # Add metadata analysis to the main report
+            report = analyzer.generate_analysis_report(include_catalog_comparison=False)
+            report["metadata_analysis"] = metadata_analysis
+            
+            # Export metadata analysis if JSON output requested
+            if args.output_json:
+                analyzer.export_to_json(args.output_json, report)
+                logger.info(f"Metadata analysis exported to {args.output_json}")
+            
+            return 0
+        
+        # Generate standard analysis report
         include_comparison = args.compare_catalog and args.catalog_csv
         report = analyzer.generate_analysis_report(include_catalog_comparison=include_comparison)
         
