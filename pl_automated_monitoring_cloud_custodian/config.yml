@@ -1,7 +1,8 @@
 pipeline:
   name: pl_automated_monitoring_cloud_custodian
   use_test_data_on_nonprod: false
-  dq_strict_mode: falsestages:
+  dq_strict_mode: false
+  stages:
   extract:
     threshold_df:
       connector: snowflake

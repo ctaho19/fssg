@@ -2,6 +2,117 @@ pipeline:
   name: pl_automated_monitoring_machine_iam_preventative
   use_test_data_on_nonprod: false
   dq_strict_mode: false
+  stages:
+    # REQUIRED: Comprehensive Data Quality Validation
+    ingress_validation:
+      thresholds_raw:
+        - type: schema_check
+          fatal: false
+          informational: true
+          envs: [qa, prod]
+          options:
+            required_columns:
+              - monitoring_metric_id
+              - control_id
+              - monitoring_metric_tier
+              - metric_name
+              - metric_description
+              - warning_threshold
+              - alerting_threshold
+              - control_executor
+        - type: count_check
+          fatal: true
+          envs: [qa, prod]
+          options:
+            data_location: Snowflake
+            threshold: 1
+        - type: consistency_check
+          fatal: false
+          informational: true
+          envs: [qa, prod]
+          options:
+            check_type: "data_freshness"
+            description: "Ingress data quality check"
+    
+      all_iam_roles:
+        - type: schema_check
+          fatal: false
+          informational: true
+          envs: [qa, prod]
+          options:
+            required_columns:
+              - RESOURCE_ID
+              - AMAZON_RESOURCE_NAME
+              - BA
+              - ACCOUNT
+              - CREATE_DATE
+              - TYPE
+              - FULL_RECORD
+              - ROLE_TYPE
+              - SF_LOAD_TIMESTAMP
+              - LOAD_TIMESTAMP
+        - type: count_check
+          fatal: true
+          envs: [qa, prod]
+          options:
+            data_location: Snowflake
+            threshold: 1
+        - type: consistency_check
+          fatal: false
+          informational: true
+          envs: [qa, prod]
+          options:
+            description: "IAM roles data quality check"
+    
+      evaluated_roles:
+        - type: schema_check
+          fatal: false
+          informational: true
+          envs: [qa, prod]
+          options:
+            required_columns:
+              - RESOURCE_NAME
+              - COMPLIANCE_STATUS
+              - CONTROL_ID
+        - type: count_check
+          fatal: false
+          informational: true
+          envs: [qa, prod]
+          options:
+            data_location: Snowflake
+            threshold: 1
+        - type: consistency_check
+          fatal: false
+          informational: true
+          envs: [qa, prod]
+          options:
+            description: "Evaluated roles data quality check"
+    
+    egress_validation:
+      monitoring_metrics:
+        - type: schema_check
+          fatal: false
+          informational: true
+          envs: [qa, prod]
+          options:
+            required_columns:
+              - control_monitoring_utc_timestamp
+              - control_id
+              - monitoring_metric_id
+              - monitoring_metric_value
+              - monitoring_metric_status
+              - metric_value_numerator
+              - metric_value_denominator
+        - type: count_check
+          fatal: false
+          informational: true
+          envs: [qa, prod]
+        - type: consistency_check
+          fatal: false
+          informational: true
+          envs: [qa, prod]
+          options:
+            description: "Egress data will not match ingress data due to API enrichment and metric calculations"
 
 environments:
   prod:
@@ -51,131 +162,3 @@ environments:
             business_application: BAENTERPRISETECHINSIGHTS
 
   local: *nonprod_config
-
-stages:
-  - name: ingress_validation
-    description: "Validate data quality of input datasets"
-    envs: [qa, prod, local]
-  - name: extract
-    description: "Extract data from Snowflake and external APIs"
-    envs: [qa, prod, local]
-  - name: transform
-    description: "Calculate Machine IAM preventative control metrics"
-    envs: [qa, prod, local]
-  - name: egress_validation
-    description: "Validate transformed metrics before loading"
-    envs: [qa, prod, local]
-  - name: load
-    description: "Load metrics to OneStream"
-    envs: [qa, prod, local]
-
-# REQUIRED: Comprehensive Data Quality Validation
-ingress_validation:
-  thresholds_raw:
-    - type: schema_check
-      fatal: false
-      informational: true
-      envs: [qa, prod]
-      options:
-        required_columns:
-          - monitoring_metric_id
-          - control_id
-          - monitoring_metric_tier
-          - metric_name
-          - metric_description
-          - warning_threshold
-          - alerting_threshold
-          - control_executor
-    - type: count_check
-      fatal: true
-      envs: [qa, prod]
-      options:
-        data_location: Snowflake
-        threshold: 1
-    - type: consistency_check
-      fatal: false
-      informational: true
-      envs: [qa, prod]
-      options:
-        check_type: "data_freshness"
-        description: "Ingress data quality check"
-
-  all_iam_roles:
-    - type: schema_check
-      fatal: false
-      informational: true
-      envs: [qa, prod]
-      options:
-        required_columns:
-          - RESOURCE_ID
-          - AMAZON_RESOURCE_NAME
-          - BA
-          - ACCOUNT
-          - CREATE_DATE
-          - TYPE
-          - FULL_RECORD
-          - ROLE_TYPE
-          - SF_LOAD_TIMESTAMP
-          - LOAD_TIMESTAMP
-    - type: count_check
-      fatal: true
-      envs: [qa, prod]
-      options:
-        data_location: Snowflake
-        threshold: 1
-    - type: consistency_check
-      fatal: false
-      informational: true
-      envs: [qa, prod]
-      options:
-        description: "IAM roles data quality check"
-
-  evaluated_roles:
-    - type: schema_check
-      fatal: false
-      informational: true
-      envs: [qa, prod]
-      options:
-        required_columns:
-          - RESOURCE_NAME
-          - COMPLIANCE_STATUS
-          - CONTROL_ID
-    - type: count_check
-      fatal: false
-      informational: true
-      envs: [qa, prod]
-      options:
-        data_location: Snowflake
-        threshold: 1
-    - type: consistency_check
-      fatal: false
-      informational: true
-      envs: [qa, prod]
-      options:
-        description: "Evaluated roles data quality check"
-
-egress_validation:
-  monitoring_metrics:
-    - type: schema_check
-      fatal: false
-      informational: true
-      envs: [qa, prod]
-      options:
-        required_columns:
-          - control_monitoring_utc_timestamp
-          - control_id
-          - monitoring_metric_id
-          - monitoring_metric_value
-          - monitoring_metric_status
-          - metric_value_numerator
-          - metric_value_denominator
-    - type: count_check
-      fatal: false
-      informational: true
-      envs: [qa, prod]
-    - type: consistency_check
-      fatal: false
-      informational: true
-      envs: [qa, prod]
-      options:
-        description: "Egress data will not match ingress data due to API enrichment and metric calculations"

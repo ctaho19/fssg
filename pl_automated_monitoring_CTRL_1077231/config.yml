@@ -2,6 +2,89 @@ pipeline:
   name: pl_automated_monitoring_CTRL_1077231
   use_test_data_on_nonprod: false
   dq_strict_mode: false
+  stages:
+    extract:
+      thresholds_raw:
+
+    ingress_validation:
+      thresholds_raw:
+        - type: schema_check
+          fatal: false
+          informational: true
+          envs:
+            - qa
+            - prod
+          options:
+            required_columns:
+              - monitoring_metric_id
+              - control_id
+              - monitoring_metric_tier
+              - alerting_threshold
+        - type: count_check
+          fatal: true
+          envs:
+            - qa
+            - prod
+          options:
+            data_location: Snowflake
+            threshold: 1
+            table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
+        - type: consistency_check
+          fatal: false
+          informational: true
+          envs:
+            - qa
+            - prod
+          options:
+            check_type: "data_freshness"
+            description: "Ingress data quality check"
+
+    transform:
+      monitoring_metrics:
+        - function: custom/calculate_ctrl1077231_metrics
+          options:
+            thresholds_raw: $thresholds_raw
+            resource_type: AWS::EC2::Instance
+
+    egress_validation:
+      monitoring_metrics:
+        - type: schema_check
+          fatal: false
+          informational: true
+          envs:
+            - qa
+            - prod
+          options:
+            required_columns:
+              - control_monitoring_utc_timestamp
+              - control_id
+              - monitoring_metric_id
+              - monitoring_metric_value
+              - monitoring_metric_status
+              - metric_value_numerator
+              - metric_value_denominator
+              - resources_info
+        - type: count_check
+          fatal: false
+          informational: true
+          envs:
+            - qa
+            - prod
+          options:
+            threshold: 1
+            description: "Ensure output data exists"
+        - type: consistency_check
+          fatal: false
+          informational: true
+          envs:
+            - qa
+            - prod
+          options:
+            check_type: "output_validation"
+            description: "Egress data will not match ingress data due to API enrichment"
+
+    load:
+      monitoring_metrics:
 
 environments:
   prod:
@@ -36,95 +119,11 @@ environments:
 
   local: *nonprod_config
 
-stages:
-  extract:
-    thresholds_raw:
+prepare_test_data:
+  thresholds_raw:
+    - function: head
+      options:
+        n: 500000
 
-  ingress_validation:
-    thresholds_raw:
-      - type: schema_check
-        fatal: false
-        informational: true
-        envs:
-          - qa
-          - prod
-        options:
-          required_columns:
-            - monitoring_metric_id
-            - control_id
-            - monitoring_metric_tier
-            - alerting_threshold
-      - type: count_check
-        fatal: true
-        envs:
-          - qa
-          - prod
-        options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
-      - type: consistency_check
-        fatal: false
-        informational: true
-        envs:
-          - qa
-          - prod
-        options:
-          check_type: "data_freshness"
-          description: "Ingress data quality check"
-
-  transform:
-    monitoring_metrics:
-      - function: custom/calculate_ctrl1077231_metrics
-        options:
-          thresholds_raw: $thresholds_raw
-          resource_type: AWS::EC2::Instance
-
-  egress_validation:
-    monitoring_metrics:
-      - type: schema_check
-        fatal: false
-        informational: true
-        envs:
-          - qa
-          - prod
-        options:
-          required_columns:
-            - control_monitoring_utc_timestamp
-            - control_id
-            - monitoring_metric_id
-            - monitoring_metric_value
-            - monitoring_metric_status
-            - metric_value_numerator
-            - metric_value_denominator
-            - resources_info
-      - type: count_check
-        fatal: false
-        informational: true
-        envs:
-          - qa
-          - prod
-        options:
-          threshold: 1
-          description: "Ensure output data exists"
-      - type: consistency_check
-        fatal: false
-        informational: true
-        envs:
-          - qa
-          - prod
-        options:
-          check_type: "output_validation"
-          description: "Egress data will not match ingress data due to API enrichment"
-
-  load:
-    monitoring_metrics:
-
-  prepare_test_data:
-    thresholds_raw:
-      - function: head
-        options:
-          n: 500000
-
-  export_test_data:
-    thresholds_raw:
+export_test_data:
+  thresholds_raw:

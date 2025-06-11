@@ -2,6 +2,64 @@ pipeline:
   name: pl_automated_monitoring_cloudradar_controls
   use_test_data_on_nonprod: false
   dq_strict_mode: false
+  stages:
+    extract:
+      thresholds_raw:
+    ingress_validation:
+      thresholds_raw:
+        - type: schema_check
+          fatal: true
+          envs:
+            - prod
+          options:
+            data_location: Snowflake
+            dataset_id: '3200d09e-69a8-49f1-9d61-fd164817364c'
+            attribute_map: {}
+        - type: count_check
+          fatal: true
+          envs:
+            - qa
+            - prod
+          options:
+            data_location: Snowflake
+            threshold: 1
+            table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
+      monitoring_metrics:
+        - type: count_check
+          fatal: true
+          envs:
+            - qa
+            - prod
+          options:
+            data_location: API
+            threshold: 1
+            table_name: CloudRadar
+    transform: {}
+    egress_validation:
+      monitoring_metrics:
+        - type: count_check
+          fatal: true
+          envs:
+            - qa
+            - prod
+          options:
+            data_location: Snowflake
+            threshold: 1
+            table_name: etip_controls_monitoring_metrics
+    consistency_checks:
+      - ingress: thresholds_raw
+        egress: monitoring_metrics
+        type: count_consistency_check
+        informational: true
+        notes: Egress data will not match ingress data due to CloudRadar API enrichment.
+        envs:
+          - prod
+        options:
+          data_location: Snowflake
+          table_name: etip_controls_monitoring_metrics
+          source_data_location: Snowflake
+          source_table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.etip_controls_monitoring_metrics_details
+    load: {}
 
 environments:
   prod:
@@ -35,62 +93,3 @@ environments:
             business_application: BAENTERPRISETECHINSIGHTS
 
   local: *nonprod_config
-
-stages:
-  extract:
-    thresholds_raw:
-  ingress_validation:
-    thresholds_raw:
-      - type: schema_check
-        fatal: true
-        envs:
-          - prod
-        options:
-          data_location: Snowflake
-          dataset_id: '3200d09e-69a8-49f1-9d61-fd164817364c'
-          attribute_map: {}
-      - type: count_check
-        fatal: true
-        envs:
-          - qa
-          - prod
-        options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.ETIP_CONTROLS_MONITORING_METRICS_DETAILS
-    monitoring_metrics:
-      - type: count_check
-        fatal: true
-        envs:
-          - qa
-          - prod
-        options:
-          data_location: API
-          threshold: 1
-          table_name: CloudRadar
-  transform: {}
-  egress_validation:
-    monitoring_metrics:
-      - type: count_check
-        fatal: true
-        envs:
-          - qa
-          - prod
-        options:
-          data_location: Snowflake
-          threshold: 1
-          table_name: etip_controls_monitoring_metrics
-  consistency_checks:
-    - ingress: thresholds_raw
-      egress: monitoring_metrics
-      type: count_consistency_check
-      informational: true
-      notes: Egress data will not match ingress data due to CloudRadar API enrichment.
-      envs:
-        - prod
-      options:
-        data_location: Snowflake
-        table_name: etip_controls_monitoring_metrics
-        source_data_location: Snowflake
-        source_table_name: ETIP_DB.PHDP_ETIP_CONTROLS_MONITORING.etip_controls_monitoring_metrics_details
-  load: {}
