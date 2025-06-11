@@ -5,102 +5,134 @@ This script paginates through CloudRadar API to analyze KMS key configurations.
 """
 
 import json
-import ssl
 import os
 import sys
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from collections import defaultdict, Counter
 import pandas as pd
-from connectors.api import OauthApi
-from connectors.ca_certs import C1_CERT_FILE
-from connectors.exchange.oauth_token import refresh
-from etip_env import set_env_vars, Env
+import requests
+import time
+import logging
+
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 class KMSRotationAnalyzer:
     """Analyze KMS keys to find patterns in rotation status false cases."""
     
-    def __init__(self, env: Env):
-        self.env = env
-        self.api_url = f"https://{self.env.exchange.exchange_url}/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
-        self.api_connector = self._get_api_connector()
+    def __init__(self, auth_token: str):
+        """
+        Initialize the analyzer with a bearer token.
         
-    def _get_api_connector(self) -> OauthApi:
-        """Set up OAuth API connector."""
-        api_token = refresh(
-            client_id=self.env.exchange.client_id,
-            client_secret=self.env.exchange.client_secret,
-            exchange_url=self.env.exchange.exchange_url,
-        )
-        
-        return OauthApi(
-            url=self.api_url,
-            api_token=f"Bearer {api_token}"
-        )
+        Args:
+            auth_token: Bearer token for API authentication
+        """
+        self.base_url = "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling"
+        self.config_url = f"{self.base_url}/search-resource-configurations"
+        self.headers = {
+            'Accept': 'application/json;v=1',
+            'Authorization': f'Bearer {auth_token}',
+            'Content-Type': 'application/json'
+        }
     
-    def fetch_kms_keys(self, resource_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def fetch_kms_keys(self, resource_ids: Optional[List[str]] = None, timeout: int = 120, max_retries: int = 3) -> List[Dict[str, Any]]:
         """
         Fetch KMS keys from CloudRadar API with pagination.
         
         Args:
             resource_ids: Optional list of specific resource IDs to analyze
+            timeout: Request timeout in seconds
+            max_retries: Maximum number of retry attempts
             
         Returns:
             List of KMS key resource configurations
         """
         all_resources = []
         next_record_key = None
+        page_count = 0
         
         while True:
-            try:
-                headers = {
-                    "Accept": "application/json;v=1",
-                    "Authorization": self.api_connector.api_token,
-                    "Content-Type": "application/json"
-                }
-                
-                # Build search parameters
-                search_params = [{"resourceType": "AWS::KMS::Key"}]
-                if resource_ids:
-                    search_params[0]["resourceId"] = resource_ids
-                
-                payload = {
-                    "searchParameters": search_params
-                    # No responseFields specified - get everything
-                }
-                
-                params = {"limit": 10000}
-                if next_record_key:
-                    params["nextRecordKey"] = next_record_key
-                
-                response = self.api_connector.send_request(
-                    url="",
-                    request_type="post",
-                    request_kwargs={
-                        "headers": headers,
-                        "json": payload,
-                        "params": params,
-                        "verify": C1_CERT_FILE,
-                        "timeout": 120
-                    },
-                    retry_delay=5,
-                    retry_count=3
-                )
-                
-                if response.status_code != 200:
-                    raise RuntimeError(f"API request failed: {response.status_code} - {response.text}")
-                
-                data = response.json()
-                resources = data.get("resourceConfigurations", [])
-                all_resources.extend(resources)
-                
-                next_record_key = data.get("nextRecordKey")
-                if not next_record_key:
-                    break
+            page_count += 1
+            
+            # Build search parameters
+            search_params = [{"resourceType": "AWS::KMS::Key"}]
+            if resource_ids:
+                search_params[0]["resourceId"] = resource_ids
+            
+            payload = {
+                "searchParameters": search_params
+                # No responseFields specified - get everything
+            }
+            
+            params = {"limit": 10000}
+            if next_record_key:
+                params["nextRecordKey"] = next_record_key
+            
+            # Retry logic
+            for retry in range(max_retries + 1):
+                try:
+                    logger.info(f"Fetching page {page_count}" + (f" (retry {retry})" if retry > 0 else ""))
                     
-            except Exception as e:
-                raise RuntimeError(f"Failed to fetch resources from API: {str(e)}")
+                    response = requests.post(
+                        self.config_url,
+                        headers=self.headers,
+                        json=payload,
+                        params=params,
+                        verify=False,  # Set to True in production with proper cert management
+                        timeout=timeout
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        resources = data.get("resourceConfigurations", [])
+                        all_resources.extend(resources)
+                        
+                        logger.info(f"Page {page_count}: Fetched {len(resources)} resources (Total: {len(all_resources)})")
+                        
+                        next_record_key = data.get("nextRecordKey")
+                        break  # Success, exit retry loop
+                        
+                    elif response.status_code == 429:
+                        wait_time = min(2 ** retry, 60)
+                        logger.warning(f"Rate limited (429). Waiting {wait_time}s before retry {retry+1}/{max_retries}")
+                        time.sleep(wait_time)
+                        if retry == max_retries:
+                            raise RuntimeError(f"Max retries reached for rate limiting")
+                    else:
+                        logger.error(f"API request failed: {response.status_code} - {response.text}")
+                        if retry < max_retries:
+                            wait_time = min(2 ** retry, 30)
+                            time.sleep(wait_time)
+                        else:
+                            raise RuntimeError(f"API request failed after {max_retries + 1} attempts: {response.status_code}")
+                            
+                except requests.exceptions.Timeout:
+                    logger.warning(f"Request timeout after {timeout}s")
+                    if retry < max_retries:
+                        wait_time = min(2 ** retry, 30)
+                        time.sleep(wait_time)
+                    else:
+                        raise RuntimeError(f"Request timeout after {max_retries + 1} attempts")
+                        
+                except Exception as e:
+                    logger.error(f"Exception during API request: {str(e)}")
+                    if retry < max_retries:
+                        wait_time = min(2 ** retry, 30)
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            
+            # Check if we're done paginating
+            if not next_record_key:
+                logger.info(f"No more pages. Total resources fetched: {len(all_resources)}")
+                break
         
         return all_resources
     
@@ -136,6 +168,10 @@ class KMSRotationAnalyzer:
                     attributes[key_name] = config_value
             else:
                 attributes[key_name] = config_value
+                
+            # Also store with original name for compatibility
+            if config_name == "supplementaryConfiguration.KeyRotationStatus":
+                attributes["rotationStatus"] = config_value
         
         # Store raw configurations as well for debugging
         attributes["_raw_configurationList"] = config_list
@@ -167,7 +203,7 @@ class KMSRotationAnalyzer:
             if attrs.get("keyState") in ["PendingDeletion", "PendingReplicaDeletion"]:
                 continue
             
-            rotation_status = attrs.get("rotationStatus")
+            rotation_status = attrs.get("KeyRotationStatus") or attrs.get("rotationStatus")
             if rotation_status == "FALSE":
                 rotation_false_keys.append(attrs)
             elif rotation_status == "TRUE":
@@ -414,11 +450,15 @@ class KMSRotationAnalyzer:
 
 def main():
     """Main function to run the analysis."""
-    # Set up environment
-    env = set_env_vars()
+    # Check for required bearer token
+    auth_token = os.environ.get("AUTH_TOKEN")
+    if not auth_token:
+        print("ERROR: AUTH_TOKEN environment variable not set.")
+        print("Usage: AUTH_TOKEN='your-bearer-token' python analyze_kms_rotation_patterns.py [resource-id-1] [resource-id-2] ...")
+        sys.exit(1)
     
     # Initialize analyzer
-    analyzer = KMSRotationAnalyzer(env)
+    analyzer = KMSRotationAnalyzer(auth_token)
     
     print("Fetching KMS keys from CloudRadar API...")
     
@@ -440,7 +480,8 @@ def main():
         rotation_false_examples = []
         for key in keys:
             attrs = analyzer.extract_key_attributes(key)
-            if attrs.get("rotationStatus") == "FALSE" and attrs.get("keyManager") != "AWS":
+            rotation_status = attrs.get("KeyRotationStatus") or attrs.get("rotationStatus")
+            if rotation_status == "FALSE" and attrs.get("keyManager") != "AWS":
                 rotation_false_examples.append(attrs)
         
         # Generate report
