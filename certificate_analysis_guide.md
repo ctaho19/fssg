@@ -15,9 +15,23 @@ The Certificate Discovery Analyzer is built on the CTRL-1077188 pipeline pattern
 
 ## Prerequisites
 
-- Access to ETIP environment with CloudRadar API credentials
-- Python environment with required dependencies
+- Bearer token for CloudRadar API authentication 
+- Python environment with required dependencies (requests, pandas, etc.)
 - (Optional) CSV file containing certificate ARNs from Snowflake catalog
+
+## Authentication Setup
+
+The certificate analysis scripts use bearer token authentication. Set your authentication token as an environment variable:
+
+```bash
+export AUTH_TOKEN="your-bearer-token-here"
+```
+
+Or provide it inline when running the script:
+
+```bash
+AUTH_TOKEN="your-bearer-token-here" python certificate_discovery_analyzer.py
+```
 
 ## Quick Start Examples
 
@@ -26,7 +40,7 @@ The Certificate Discovery Analyzer is built on the CTRL-1077188 pipeline pattern
 Discover all certificates without any additional analysis:
 
 ```bash
-python certificate_discovery_analyzer.py
+AUTH_TOKEN="your-bearer-token" python certificate_discovery_analyzer.py
 ```
 
 This will:
@@ -40,7 +54,7 @@ This will:
 Compare API discoveries with your Snowflake certificate catalog:
 
 ```bash
-python certificate_discovery_analyzer.py \\
+AUTH_TOKEN="your-bearer-token" python certificate_discovery_analyzer.py \\
     --catalog-csv snowflake_certificates.csv \\
     --compare-catalog
 ```
@@ -55,7 +69,7 @@ This adds:
 Comprehensive analysis with detailed exports:
 
 ```bash
-python certificate_discovery_analyzer.py \\
+AUTH_TOKEN="your-bearer-token" python certificate_discovery_analyzer.py \\
     --catalog-csv snowflake_certificates.csv \\
     --compare-catalog \\
     --output-json detailed_analysis.json \\
@@ -74,7 +88,7 @@ This provides:
 Test the script without making API calls:
 
 ```bash
-python certificate_discovery_analyzer.py \\
+AUTH_TOKEN="your-bearer-token" python certificate_discovery_analyzer.py \\
     --dry-run \\
     --output-json mock_analysis.json
 ```
@@ -338,10 +352,10 @@ The script includes built-in optimizations:
 
 **1. Authentication Errors**
 ```
-ERROR: OAuth refresh failed
+ERROR: AUTH_TOKEN environment variable not set
 ```
-- Verify ETIP environment is properly configured
-- Check that exchange URL, client ID, and client secret are correct
+- Ensure AUTH_TOKEN environment variable is set with a valid bearer token
+- Verify your bearer token has the necessary permissions for CloudRadar API access
 
 **2. CSV Loading Errors**
 ```
@@ -370,7 +384,7 @@ ERROR: Out of memory
 Use `--verbose` flag for detailed logging:
 
 ```bash
-python certificate_discovery_analyzer.py --verbose
+AUTH_TOKEN="your-bearer-token" python certificate_discovery_analyzer.py --verbose
 ```
 
 This provides:

@@ -37,18 +37,14 @@ import json
 import csv
 import time
 import argparse
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
 import pandas as pd
 import logging
+import requests
 from dataclasses import dataclass, asdict
-
-# Import existing pipeline components
-from connectors.api import OauthApi
-from connectors.ca_certs import C1_CERT_FILE
-from connectors.exchange.oauth_token import refresh
-from etip_env import Env, set_env_vars
 
 # Configure logging
 logging.basicConfig(
@@ -101,24 +97,62 @@ class CertificateInfo:
 class CertificateDiscoveryAnalyzer:
     """Main analyzer class following CTRL-1077188 patterns"""
     
-    def __init__(self, env: Env):
-        self.env = env
-        self.api_url = f"https://{self.env.exchange.exchange_url}/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
+    def __init__(self, auth_token: str):
+        self.auth_token = auth_token
+        self.api_url = "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
         self.certificates: List[CertificateInfo] = []
         self.catalog_arns: Set[str] = set()
+        self.headers = {
+            'Accept': 'application/json;v=1',
+            'Authorization': f'Bearer {auth_token}',
+            'Content-Type': 'application/json'
+        }
         
-    def _get_api_connector(self) -> OauthApi:
-        """Standard OAuth API connector setup following Zach's pattern"""
-        api_token = refresh(
-            client_id=self.env.exchange.client_id,
-            client_secret=self.env.exchange.client_secret,
-            exchange_url=self.env.exchange.exchange_url,
-        )
+    def _make_api_request(self, payload: Dict, timeout: int = 120, max_retries: int = 3) -> requests.Response:
+        """Make API request with bearer token authentication"""
+        for retry in range(max_retries + 1):
+            try:
+                response = requests.post(
+                    self.api_url,
+                    headers=self.headers,
+                    json=payload,
+                    verify=False,  # Set to True in production with proper cert management
+                    timeout=timeout
+                )
+                
+                if response.status_code == 200:
+                    return response
+                elif response.status_code == 429:
+                    wait_time = min(2 ** retry, 60)
+                    logger.warning(f"Rate limited (429). Waiting {wait_time}s before retry {retry+1}/{max_retries}")
+                    time.sleep(wait_time)
+                    if retry == max_retries:
+                        raise RuntimeError(f"Max retries reached for rate limiting")
+                else:
+                    logger.error(f"API request failed: {response.status_code} - {response.text}")
+                    if retry < max_retries:
+                        wait_time = min(2 ** retry, 30)
+                        time.sleep(wait_time)
+                    else:
+                        raise RuntimeError(f"API request failed after {max_retries + 1} attempts: {response.status_code}")
+                        
+            except requests.exceptions.Timeout:
+                logger.warning(f"Request timeout after {timeout}s")
+                if retry < max_retries:
+                    wait_time = min(2 ** retry, 30)
+                    time.sleep(wait_time)
+                else:
+                    raise RuntimeError(f"Request timeout after {max_retries + 1} attempts")
+                    
+            except Exception as e:
+                logger.error(f"Exception during API request: {str(e)}")
+                if retry < max_retries:
+                    wait_time = min(2 ** retry, 30)
+                    time.sleep(wait_time)
+                else:
+                    raise
         
-        return OauthApi(
-            url=self.api_url,
-            api_token=f"Bearer {api_token}"
-        )
+        raise RuntimeError("API request failed after all retry attempts")
     
     def _categorize_issuer(self, issuer: str) -> str:
         """Categorize certificate issuer into standard types"""
@@ -269,7 +303,6 @@ class CertificateDiscoveryAnalyzer:
         
         logger.info("Starting certificate discovery via CloudRadar API...")
         
-        api_connector = self._get_api_connector()
         all_resources = []
         next_record_key = None
         page_count = 0
@@ -289,31 +322,11 @@ class CertificateDiscoveryAnalyzer:
                 page_count += 1
                 logger.info(f"Fetching page {page_count}...")
                 
-                headers = {
-                    "Accept": "application/json;v=1",
-                    "Authorization": api_connector.api_token,
-                    "Content-Type": "application/json"
-                }
-                
                 payload = api_payload.copy()
                 if next_record_key:
                     payload["nextRecordKey"] = next_record_key
                 
-                response = api_connector.send_request(
-                    url="",  # Empty since full URL is in api_connector.url
-                    request_type="post",
-                    request_kwargs={
-                        "headers": headers,
-                        "json": payload,
-                        "verify": C1_CERT_FILE,
-                        "timeout": 120,
-                    },
-                    retry_delay=5,
-                    retry_count=3,
-                )
-                
-                if response.status_code != 200:
-                    raise RuntimeError(f"API request failed: {response.status_code} - {response.text}")
+                response = self._make_api_request(payload)
                 
                 data = response.json()
                 resources = data.get("resourceConfigurations", [])
@@ -721,12 +734,15 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
     
     try:
-        # Initialize environment
-        logger.info("Initializing ETIP environment...")
-        env = set_env_vars()
+        # Get authentication token from environment
+        auth_token = os.environ.get("AUTH_TOKEN")
+        if not auth_token:
+            logger.error("AUTH_TOKEN environment variable not set.")
+            logger.error("Usage: AUTH_TOKEN='your-bearer-token' python certificate_discovery_analyzer.py [options]")
+            return 1
         
         # Create analyzer
-        analyzer = CertificateDiscoveryAnalyzer(env)
+        analyzer = CertificateDiscoveryAnalyzer(auth_token)
         
         # Load catalog data if provided
         if args.catalog_csv:

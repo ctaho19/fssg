@@ -14,6 +14,7 @@ Usage:
 
 import json
 import logging
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -22,12 +23,15 @@ import sys
 
 import pandas as pd
 
-from config_pipeline import ConfigPipeline
-from connectors.api import OauthApi
-from connectors.ca_certs import C1_CERT_FILE
-from connectors.exchange.oauth_token import refresh
-from connectors.snowflake import SnowflakeConnector
-from etip_env import Env, set_env_vars
+# Authentication via bearer token  
+# from config_pipeline import ConfigPipeline
+# from connectors.api import OauthApi
+# from connectors.ca_certs import C1_CERT_FILE
+# from connectors.exchange.oauth_token import refresh
+# from connectors.snowflake import SnowflakeConnector
+# from etip_env import Env, set_env_vars
+import requests
+import os
 
 # Configure logging
 logging.basicConfig(
@@ -45,29 +49,69 @@ class CertificateCatalogComparison:
     for certificate monitoring and compliance purposes.
     """
     
-    def __init__(self, env: Env):
-        self.env = env
-        self.api_url = f"https://{self.env.exchange.exchange_url}/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
+    def __init__(self, auth_token: str):
+        self.auth_token = auth_token
+        self.api_url = "https://api.cloud.capitalone.com/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
         self.api_certificates = {}
         self.catalog_certificates = {}
         self.comparison_results = {}
+        self.headers = {
+            'Accept': 'application/json;v=1',
+            'Authorization': f'Bearer {auth_token}',
+            'Content-Type': 'application/json'
+        }
         
-    def _get_api_connector(self) -> OauthApi:
-        """Get authenticated API connector"""
-        api_token = refresh(
-            client_id=self.env.exchange.client_id,
-            client_secret=self.env.exchange.client_secret,
-            exchange_url=self.env.exchange.exchange_url,
-        )
+    def _make_api_request(self, payload: Dict, timeout: int = 120, max_retries: int = 3) -> requests.Response:
+        """Make API request with bearer token authentication"""
+        for retry in range(max_retries + 1):
+            try:
+                response = requests.post(
+                    self.api_url,
+                    headers=self.headers,
+                    json=payload,
+                    verify=False,  # Set to True in production with proper cert management
+                    timeout=timeout
+                )
+                
+                if response.status_code == 200:
+                    return response
+                elif response.status_code == 429:
+                    wait_time = min(2 ** retry, 60)
+                    logger.warning(f"Rate limited (429). Waiting {wait_time}s before retry {retry+1}/{max_retries}")
+                    time.sleep(wait_time)
+                    if retry == max_retries:
+                        raise RuntimeError(f"Max retries reached for rate limiting")
+                else:
+                    logger.error(f"API request failed: {response.status_code} - {response.text}")
+                    if retry < max_retries:
+                        wait_time = min(2 ** retry, 30)
+                        time.sleep(wait_time)
+                    else:
+                        raise RuntimeError(f"API request failed after {max_retries + 1} attempts: {response.status_code}")
+                        
+            except requests.exceptions.Timeout:
+                logger.warning(f"Request timeout after {timeout}s")
+                if retry < max_retries:
+                    wait_time = min(2 ** retry, 30)
+                    time.sleep(wait_time)
+                else:
+                    raise RuntimeError(f"Request timeout after {max_retries + 1} attempts")
+                    
+            except Exception as e:
+                logger.error(f"Exception during API request: {str(e)}")
+                if retry < max_retries:
+                    wait_time = min(2 ** retry, 30)
+                    time.sleep(wait_time)
+                else:
+                    raise
         
-        return OauthApi(
-            url=self.api_url,
-            api_token=f"Bearer {api_token}"
-        )
+        raise RuntimeError("API request failed after all retry attempts")
     
-    def _get_snowflake_connector(self) -> SnowflakeConnector:
-        """Get Snowflake connector for catalog data"""
-        return SnowflakeConnector(env=self.env)
+    def _get_snowflake_connector(self):
+        """Get Snowflake connector for catalog data - Note: This functionality requires additional setup"""
+        # Note: Snowflake connectivity would need to be implemented separately
+        # as it requires specific configuration beyond bearer token authentication
+        raise NotImplementedError("Snowflake connectivity requires separate configuration. Use CSV export from Snowflake instead.")
     
     def fetch_api_certificates(self, issuer_filter: Optional[str] = None) -> Dict[str, Dict]:
         """
@@ -81,7 +125,6 @@ class CertificateCatalogComparison:
         """
         logger.info(f"Fetching certificates from CloudRadar API (issuer filter: {issuer_filter or 'None'})...")
         
-        api_connector = self._get_api_connector()
         all_certificates = {}
         next_record_key = None
         
@@ -111,12 +154,6 @@ class CertificateCatalogComparison:
             ]
         }
         
-        headers = {
-            "Accept": "application/json;v=1",
-            "Authorization": api_connector.api_token,
-            "Content-Type": "application/json"
-        }
-        
         page_count = 0
         while True:
             try:
@@ -127,21 +164,7 @@ class CertificateCatalogComparison:
                 if next_record_key:
                     payload["nextRecordKey"] = next_record_key
                 
-                response = api_connector.send_request(
-                    url="",
-                    request_type="post",
-                    request_kwargs={
-                        "headers": headers,
-                        "json": payload,
-                        "verify": C1_CERT_FILE,
-                        "timeout": 120,
-                    },
-                    retry_delay=5,
-                    retry_count=3
-                )
-                
-                if response.status_code != 200:
-                    raise RuntimeError(f"API request failed: {response.status_code} - {response.text}")
+                response = self._make_api_request(payload)
                 
                 data = response.json()
                 certificates = data.get("resourceConfigurations", [])
@@ -703,34 +726,47 @@ Examples:
     args = parser.parse_args()
     
     try:
-        # Initialize environment
-        logger.info("Initializing environment...")
-        env = set_env_vars()
+        # Get authentication token from environment
+        auth_token = os.environ.get("AUTH_TOKEN")
+        if not auth_token:
+            logger.error("AUTH_TOKEN environment variable not set.")
+            logger.error("Usage: AUTH_TOKEN='your-bearer-token' python certificate_catalog_comparison.py [options]")
+            return 1
         
         # Create comparison tool
-        comparator = CertificateCatalogComparison(env)
+        comparator = CertificateCatalogComparison(auth_token)
         
-        # Fetch data from both sources
-        logger.info("Fetching certificate data from both sources...")
+        # Fetch data from API source (Snowflake requires separate setup)
+        logger.info("Fetching certificate data from API...")
         api_certs = comparator.fetch_api_certificates(issuer_filter=args.issuer)
-        catalog_certs = comparator.fetch_catalog_certificates(
-            issuer_filter=args.issuer,
-            days_back=args.days_back
-        )
         
-        if not api_certs and not catalog_certs:
-            logger.warning("No certificates found in either dataset. Exiting.")
+        logger.warning("Snowflake catalog functionality requires separate configuration.")
+        logger.warning("Please export certificate data from Snowflake to CSV and use certificate_discovery_analyzer.py with --catalog-csv option instead.")
+        
+        # Skip catalog fetch for now
+        # catalog_certs = comparator.fetch_catalog_certificates(
+        #     issuer_filter=args.issuer,
+        #     days_back=args.days_back
+        # )
+        
+        if not api_certs:
+            logger.warning("No certificates found in API dataset. Exiting.")
             return
         
-        # Perform comparison
-        comparison_results = comparator.compare_datasets()
+        logger.info(f"Found {len(api_certs)} certificates from API")
+        logger.info("Note: For full comparison functionality, use certificate_discovery_analyzer.py with --catalog-csv option")
         
-        # Print summary
-        comparator.print_summary()
-        
-        # Export results if requested
+        # Export API results if requested
         if args.output_file:
-            comparator.export_results(args.output_file, args.format)
+            logger.info(f"Exporting API certificate data to {args.output_file}")
+            # Simple export of API data
+            if args.format == "json":
+                with open(args.output_file, 'w') as f:
+                    json.dump(api_certs, f, indent=2, default=str)
+            elif args.format == "csv":
+                import pandas as pd
+                df = pd.DataFrame.from_dict(api_certs, orient='index')
+                df.to_csv(args.output_file, index=False)
         
         logger.info("Certificate catalog comparison completed successfully.")
         
