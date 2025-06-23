@@ -5,7 +5,7 @@ from freezegun import freeze_time
 from datetime import datetime
 import json
 
-from pl_automated_monitoring_CTRL_1080553.pipeline import (
+from pipelines.pl_automated_monitoring_ctrl_1080553.pipeline import (
     PLAutomatedMonitoringCTRL1080553,
     calculate_metrics
 )
@@ -194,7 +194,7 @@ def test_main_function_execution(mock):
                 code = """
 if True:
     from etip_env import set_env_vars
-    from pl_automated_monitoring_CTRL_1080553.pipeline import run
+    from pipelines.pl_automated_monitoring_CTRL_1080553.pipeline import run
     
     env = set_env_vars()
     try:

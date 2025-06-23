@@ -229,9 +229,9 @@ class PLAutomatedMonitoringMachineIamPreventative(ConfigPipeline):
                 alert_threshold = threshold.get("alerting_threshold", 95.0)
                 warning_threshold = threshold.get("warning_threshold", 97.0)
                 
-                if metric_value >= alert_threshold:
+                if warning_threshold is not None and metric_value >= warning_threshold:
                     compliance_status = "Green"
-                elif warning_threshold is not None and metric_value >= warning_threshold:
+                elif metric_value >= alert_threshold:
                     compliance_status = "Yellow"
                 else:
                     compliance_status = "Red"

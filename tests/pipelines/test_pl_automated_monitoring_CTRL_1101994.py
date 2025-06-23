@@ -5,7 +5,7 @@ from freezegun import freeze_time
 from datetime import datetime
 import json
 
-from pl_automated_monitoring_CTRL_1101994.pipeline import (
+from pl_automated_monitoring_ctrl_1101994.pipeline import (
     PLAutomatedMonitoringCTRL1101994,
     calculate_metrics
 )

@@ -305,6 +305,7 @@ def test_run_function():
     
     with patch('pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline.PLAutomatedMonitoringMachineIamPreventative') as mock_pipeline_class:
         mock_pipeline = Mock()
+        mock_pipeline.configure_from_filename = Mock()
         mock_pipeline_class.return_value = mock_pipeline
         mock_pipeline.run.return_value = "test_result"
         
@@ -343,9 +344,107 @@ def test_compliance_status_determination():
             
             result = pipeline._calculate_metrics(thresholds_df, iam_roles_df, evaluated_roles_df)
             
-            # 100% coverage should be Green (>= 95% alerting threshold)
+            # 100% coverage should be Green (>= 97% warning threshold)
             assert result.iloc[0]["monitoring_metric_value"] == 100.0
             assert result.iloc[0]["monitoring_metric_status"] == "Green"
+
+
+def test_compliance_status_yellow_condition():
+    """Test Yellow compliance status for metrics between alert and warning thresholds"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringMachineIamPreventative(env)
+    
+    # Create scenario that results in 96% compliance (between 95% and 97%)
+    thresholds_df = pd.DataFrame([
+        {"monitoring_metric_id": "MNTR-1105806-T2", "control_id": "CTRL-1105806",
+         "monitoring_metric_tier": "Tier 2", "warning_threshold": 97.0, "alerting_threshold": 95.0}
+    ])
+    
+    # Setup 25 roles, 24 compliant = 96% compliance
+    iam_roles_df = pd.DataFrame([
+        {"RESOURCE_ID": f"role{i}", "AMAZON_RESOURCE_NAME": f"arn:aws:iam::123456789012:role/Machine{i}",
+         "BA": "BA1", "ACCOUNT": "123456789012", "ROLE_TYPE": "MACHINE", "TYPE": "role"}
+        for i in range(1, 26)
+    ])
+    
+    # 24 compliant, 1 non-compliant
+    evaluated_roles_data = []
+    for i in range(1, 25):  # First 24 are compliant
+        evaluated_roles_data.append({
+            "RESOURCE_NAME": f"arn:aws:iam::123456789012:role/Machine{i}",
+            "COMPLIANCE_STATUS": "Compliant", 
+            "CONTROL_ID": "AC-6.AWS.13.v01"
+        })
+    # Last one is non-compliant
+    evaluated_roles_data.append({
+        "RESOURCE_NAME": "arn:aws:iam::123456789012:role/Machine25",
+        "COMPLIANCE_STATUS": "NonCompliant", 
+        "CONTROL_ID": "AC-6.AWS.13.v01"
+    })
+    
+    evaluated_roles_df = pd.DataFrame(evaluated_roles_data)
+    
+    # Mock OAuth token refresh
+    with patch('pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline.refresh') as mock_refresh:
+        mock_refresh.return_value = "test_token"
+        
+        with patch.object(pipeline, '_get_approved_accounts') as mock_accounts:
+            mock_accounts.return_value = ["123456789012"]
+            
+            result = pipeline._calculate_metrics(thresholds_df, iam_roles_df, evaluated_roles_df)
+            
+            # 96% compliance should be Yellow (>= 95% alert but < 97% warning)
+            assert result.iloc[0]["monitoring_metric_value"] == 96.0
+            assert result.iloc[0]["monitoring_metric_status"] == "Yellow"
+
+
+def test_compliance_status_red_condition():
+    """Test Red compliance status for metrics below alert threshold"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringMachineIamPreventative(env)
+    
+    # Create scenario that results in 90% compliance (below 95%)
+    thresholds_df = pd.DataFrame([
+        {"monitoring_metric_id": "MNTR-1105806-T2", "control_id": "CTRL-1105806",
+         "monitoring_metric_tier": "Tier 2", "warning_threshold": 97.0, "alerting_threshold": 95.0}
+    ])
+    
+    # Setup 10 roles, 9 compliant = 90% compliance
+    iam_roles_df = pd.DataFrame([
+        {"RESOURCE_ID": f"role{i}", "AMAZON_RESOURCE_NAME": f"arn:aws:iam::123456789012:role/Machine{i}",
+         "BA": "BA1", "ACCOUNT": "123456789012", "ROLE_TYPE": "MACHINE", "TYPE": "role"}
+        for i in range(1, 11)
+    ])
+    
+    # 9 compliant, 1 non-compliant
+    evaluated_roles_data = []
+    for i in range(1, 10):  # First 9 are compliant
+        evaluated_roles_data.append({
+            "RESOURCE_NAME": f"arn:aws:iam::123456789012:role/Machine{i}",
+            "COMPLIANCE_STATUS": "Compliant", 
+            "CONTROL_ID": "AC-6.AWS.13.v01"
+        })
+    # Last one is non-compliant
+    evaluated_roles_data.append({
+        "RESOURCE_NAME": "arn:aws:iam::123456789012:role/Machine10",
+        "COMPLIANCE_STATUS": "NonCompliant", 
+        "CONTROL_ID": "AC-6.AWS.13.v01"
+    })
+    
+    evaluated_roles_df = pd.DataFrame(evaluated_roles_data)
+    
+    # Mock OAuth token refresh
+    with patch('pipelines.pl_automated_monitoring_machine_iam_preventative.pipeline.refresh') as mock_refresh:
+        mock_refresh.return_value = "test_token"
+        
+        with patch.object(pipeline, '_get_approved_accounts') as mock_accounts:
+            mock_accounts.return_value = ["123456789012"]
+            
+            result = pipeline._calculate_metrics(thresholds_df, iam_roles_df, evaluated_roles_df)
+            
+            # 90% compliance should be Red (< 95% alert threshold)
+            assert result.iloc[0]["monitoring_metric_value"] == 90.0
+            assert result.iloc[0]["monitoring_metric_status"] == "Red"
 
 
 if __name__ == "__main__":

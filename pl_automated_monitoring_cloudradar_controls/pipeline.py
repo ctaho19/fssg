@@ -419,5 +419,6 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
     # This is the extract portion for the API
     def extract(self) -> pd.DataFrame:
         df = super().extract()
-        df["monitoring_metrics"] = self._calculate_metrics(df["thresholds_raw"])
+        # Wrap the DataFrame in a list to store it as a single value in the cell
+        df["monitoring_metrics"] = [self._calculate_metrics(df["thresholds_raw"].iloc[0])]
         return df

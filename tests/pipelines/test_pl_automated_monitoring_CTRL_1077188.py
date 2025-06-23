@@ -8,7 +8,7 @@ from requests.exceptions import RequestException
 from config_pipeline import ConfigPipeline
 
 # Import pipeline components
-from pl_automated_monitoring_CTRL_1077188.pipeline import (
+from pl_automated_monitoring_ctrl_1077188.pipeline import (
     PLAutomatedMonitoringCTRL1077188,
     run
 )

@@ -1,5 +1,6 @@
 import pytest
 import pandas as pd
+import numpy as np
 from unittest.mock import Mock, patch
 from freezegun import freeze_time
 from datetime import datetime
@@ -7,7 +8,7 @@ import json
 from config_pipeline import ConfigPipeline
 
 # Import pipeline components
-from pipelines.pl_automated_monitoring_ctrl_1079134.pipeline import (
+from pipelines.pl_automated_monitoring_CTRL_1079134.pipeline import (
     PLAutomatedMonitoringCTRL1079134,
     run
 )
@@ -162,8 +163,8 @@ def test_extract_method_success():
         for _, row in metrics_df.iterrows():
             assert isinstance(row["control_monitoring_utc_timestamp"], datetime)
             assert isinstance(row["monitoring_metric_value"], float)
-            assert pd.api.types.is_integer_dtype(type(row["metric_value_numerator"]))
-            assert pd.api.types.is_integer_dtype(type(row["metric_value_denominator"]))
+            assert isinstance(row["metric_value_numerator"], (int, np.integer))
+            assert isinstance(row["metric_value_denominator"], (int, np.integer))
             assert row["control_id"] == "CTRL-1079134"
 
 def test_extract_method_empty_thresholds():
@@ -543,7 +544,7 @@ def test_main_function_execution():
                 code = """
 if True:
     from etip_env import set_env_vars
-    from pipelines.pl_automated_monitoring_ctrl_1079134.pipeline import run
+    from pipelines.pl_automated_monitoring_CTRL_1079134.pipeline import run
     
     env = set_env_vars()
     try:

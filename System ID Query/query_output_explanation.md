@@ -3,44 +3,6 @@
 ## Purpose
 This query validates whether the COF System ID Exclusion Rule is working correctly by comparing what should happen (expected) vs. what actually happened (actual) during quarterly certification campaigns.
 
-## Data Sources
-
-Here are all of the datasets used in the SnowFlake Query
-
-  Identity Management Tables (identityiq schema)
-
-  1. identityiq.spt_identity - Core identity/employee records
-  2. identityiq.spt_link - Links between identities and their accounts
-  3. identityiq.spt_application - Applications/systems catalog
-  4. identityiq.spt_identity_entitlement - Entitlements assigned to
-  identities
-  5. identityiq.spt_bundle - Role/bundle definitions
-  6. identityiq.spt_bundle_requirements - Parent-child role relationships
-  7. identityiq.spt_managed_attribute - Entitlement metadata and properties
-
-  Certification Tables (identityiq schema)
-
-  8. identityiq.spt_certification - Certification campaigns
-  9. identityiq.spt_certification_entity - Entities (identities) being
-  certified
-  10. identityiq.spt_certification_item - Individual items in certification
-  11. identityiq.spt_entitlement_snapshot - Snapshot of entitlements at
-  certification time
-  12. identityiq.spt_archived_cert_entity - Archived/excluded certification
-   entities
-  13. identityiq.spt_archived_cert_item - Archived/excluded certification
-  items
-  14. identityiq.spt_certification_tags - Tags associated with
-  certifications
-  15. identityiq.spt_tag - Tag definitions
-
-  Custom Exclusion Table (iiqcap1 schema)
-
-  16. iiqcap1.certification_exclusion - Custom exclusion rules
-  configuration
-
-  Total: 16 tables (15 from identityiq schema, 1 from iiqcap1 schema)
-
 ## Query Output Columns
 
 ### 1. **ITEM_TYPE**
@@ -158,26 +120,17 @@ Large numbers of discrepancies indicate:
    - Ensure `cof_app_certification_freq` = 'Quarterly'
    - Check application isn't in exclusion list
 
-## Explanation 
+## Use Cases
 
-         Through meticulous reverse engineering, we have successfully
-          transformed the Oracle PL/SQL validation script into a
-          functionally equivalent Snowflake query that maintains complete
-          fidelity to the original business logic and validation
-          requirements. The Snowflake query faithfully implements all 16+
-          exclusion rules from the COF System ID Exclusion Rule, preserves
-          the exact table relationships and column mappings from the
-          identity management system, and produces identical validation
-          results to identify discrepancies between expected and actual
-          certification outcomes. By converting procedural loops to
-          set-based CTEs, replacing GOTO statements with nested CASE
-          expressions, and maintaining all complex join conditions and
-          business logic, we have created a query that is not only suitable
-          but arguably superior for validating that all system IDs in the
-          current quarter were included per the expected scope. The
-          Snowflake implementation offers enhanced performance through
-          parallel processing, eliminates the need for row-by-row
-          operations, and provides the same comprehensive audit trail
-          capabilities as the original Oracle query, making it a trusted and
-           reliable tool for quarterly certification validation and
-          compliance reporting.
+1. **Audit Compliance**: Prove certification process follows defined rules
+2. **Rule Debugging**: Identify which exclusion rules aren't working
+3. **Process Improvement**: Find patterns to refine exclusion logic
+4. **Exception Reporting**: Generate reports for manual review
+
+## Next Steps
+
+1. Run query after each certification campaign
+2. Investigate each discrepancy to determine root cause
+3. Update exclusion rules or fix data issues as needed
+4. Re-run to verify fixes are working
+5. Document any business rule changes

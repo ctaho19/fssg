@@ -4,7 +4,6 @@ from datetime import datetime
 import json
 from config_pipeline import ConfigPipeline
 from etip_env import Env
-from transform_library import transformer
 
 def run(
     env: Env,
@@ -25,19 +24,17 @@ class PLAutomatedMonitoringCTRL1101994(ConfigPipeline):
         super().__init__(env)
         self.env = env
 
-@transformer
-def calculate_metrics(thresholds_raw: pd.DataFrame, symantec_proxy_outcome: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
-    """
-    Core business logic transformer for Symantec Proxy monitoring compliance metrics
-    
-    Args:
-        thresholds_raw: DataFrame containing metric thresholds from SQL query
-        symantec_proxy_outcome: DataFrame containing Symantec Proxy test outcomes
-        context: Pipeline context
+    def _calculate_metrics(self, thresholds_raw: pd.DataFrame, symantec_proxy_outcome: pd.DataFrame) -> pd.DataFrame:
+        """
+        Core business logic for Symantec Proxy monitoring compliance metrics
         
-    Returns:
-        DataFrame with standardized output schema
-    """
+        Args:
+            thresholds_raw: DataFrame containing metric thresholds from SQL query
+            symantec_proxy_outcome: DataFrame containing Symantec Proxy test outcomes
+            
+        Returns:
+            DataFrame with standardized output schema
+        """
     
     # Step 1: Input Validation (REQUIRED)
     if thresholds_raw.empty:
@@ -81,7 +78,19 @@ def calculate_metrics(thresholds_raw: pd.DataFrame, symantec_proxy_outcome: pd.D
         }
         results.append(result)
     
-    return pd.DataFrame(results)
+        result_df = pd.DataFrame(results)
+        
+        # Ensure correct data types to match test expectations
+        if not result_df.empty:
+            result_df = result_df.astype(
+                {
+                    "metric_value_numerator": "int64",
+                    "metric_value_denominator": "int64",
+                    "monitoring_metric_value": "float64",
+                }
+            )
+        
+        return result_df
 
 def _calculate_symantec_proxy_metrics(symantec_proxy_outcome: pd.DataFrame):
     """Calculate Symantec Proxy test success metrics."""
@@ -127,6 +136,16 @@ def _calculate_symantec_proxy_metrics(symantec_proxy_outcome: pd.DataFrame):
         non_compliant_resources = [json.dumps({"issue": "No Symantec Proxy outcome data available"})]
     
     return metric_value, compliant_count, total_count, non_compliant_resources
+
+    def extract(self) -> pd.DataFrame:
+        """Override extract to integrate SQL data with metric calculations"""
+        df = super().extract()
+        # Wrap the DataFrame in a list to store it as a single value in the cell
+        df["monitoring_metrics"] = [self._calculate_metrics(
+            df["thresholds_raw"].iloc[0],
+            df["symantec_proxy_outcome"].iloc[0]
+        )]
+        return df
 
 if __name__ == "__main__":
     from etip_env import set_env_vars

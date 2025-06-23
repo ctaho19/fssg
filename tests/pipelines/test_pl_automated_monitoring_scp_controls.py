@@ -331,6 +331,7 @@ def test_run_function():
     
     with patch('pipelines.pl_automated_monitoring_scp_controls.pipeline.PLAutomatedMonitoringScpControls') as mock_pipeline_class:
         mock_pipeline = Mock()
+        mock_pipeline.configure_from_filename = Mock()
         mock_pipeline_class.return_value = mock_pipeline
         mock_pipeline.run.return_value = "test_result"
         
@@ -367,6 +368,90 @@ def test_compliance_status_determination():
     # 100% coverage should be Green (>= 97% warning threshold)
     assert result.iloc[0]["monitoring_metric_value"] == 100.0
     assert result.iloc[0]["monitoring_metric_status"] == "Green"
+
+
+def test_compliance_status_yellow_condition():
+    """Test Yellow compliance status for metrics between alert and warning thresholds"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringScpControls(env)
+    
+    # Create scenario that results in 96% compliance (between 95% and 97%)
+    thresholds_df = pd.DataFrame([
+        {"monitoring_metric_id": "MNTR-1077770-T2", "control_id": "CTRL-1077770",
+         "monitoring_metric_tier": "Tier 2", "warning_threshold": 97.0, "alerting_threshold": 95.0}
+    ])
+    
+    # Setup 25 accounts, 24 compliant = 96% compliance for Tier 2
+    in_scope_accounts_df = pd.DataFrame([{"ACCOUNT": f"12345678901{i}"} for i in range(25)])
+    in_scope_asvs_df = _mock_in_scope_asvs()
+    microcertification_asvs_df = _mock_microcertification_asvs()
+    
+    # 24 compliant, 1 non-compliant accounts
+    evaluated_accounts_data = []
+    for i in range(24):  # First 24 are compliant
+        evaluated_accounts_data.append({
+            "RESOURCE_ID": f"12345678901{i}",
+            "RESOURCE_TYPE": "Account",
+            "COMPLIANCE_STATUS": "Compliant",
+            "CONTROL_ID": "AC-3.AWS.146.v02"
+        })
+    # Last one is non-compliant
+    evaluated_accounts_data.append({
+        "RESOURCE_ID": "123456789124",
+        "RESOURCE_TYPE": "Account", 
+        "COMPLIANCE_STATUS": "NonCompliant",
+        "CONTROL_ID": "AC-3.AWS.146.v02"
+    })
+    
+    evaluated_accounts_df = pd.DataFrame(evaluated_accounts_data)
+    
+    result = pipeline._calculate_metrics(thresholds_df, in_scope_accounts_df, in_scope_asvs_df, microcertification_asvs_df, evaluated_accounts_df)
+    
+    # 96% compliance should be Yellow (>= 95% alert but < 97% warning)
+    assert result.iloc[0]["monitoring_metric_value"] == 96.0
+    assert result.iloc[0]["monitoring_metric_status"] == "Yellow"
+
+
+def test_compliance_status_red_condition():
+    """Test Red compliance status for metrics below alert threshold"""
+    env = MockEnv()
+    pipeline = PLAutomatedMonitoringScpControls(env)
+    
+    # Create scenario that results in 90% compliance (below 95%)
+    thresholds_df = pd.DataFrame([
+        {"monitoring_metric_id": "MNTR-1077770-T2", "control_id": "CTRL-1077770",
+         "monitoring_metric_tier": "Tier 2", "warning_threshold": 97.0, "alerting_threshold": 95.0}
+    ])
+    
+    # Setup 10 accounts, 9 compliant = 90% compliance for Tier 2
+    in_scope_accounts_df = pd.DataFrame([{"ACCOUNT": f"12345678901{i}"} for i in range(10)])
+    in_scope_asvs_df = _mock_in_scope_asvs()
+    microcertification_asvs_df = _mock_microcertification_asvs()
+    
+    # 9 compliant, 1 non-compliant accounts
+    evaluated_accounts_data = []
+    for i in range(9):  # First 9 are compliant
+        evaluated_accounts_data.append({
+            "RESOURCE_ID": f"12345678901{i}",
+            "RESOURCE_TYPE": "Account",
+            "COMPLIANCE_STATUS": "Compliant",
+            "CONTROL_ID": "AC-3.AWS.146.v02"
+        })
+    # Last one is non-compliant
+    evaluated_accounts_data.append({
+        "RESOURCE_ID": "123456789019",
+        "RESOURCE_TYPE": "Account",
+        "COMPLIANCE_STATUS": "NonCompliant", 
+        "CONTROL_ID": "AC-3.AWS.146.v02"
+    })
+    
+    evaluated_accounts_df = pd.DataFrame(evaluated_accounts_data)
+    
+    result = pipeline._calculate_metrics(thresholds_df, in_scope_accounts_df, in_scope_asvs_df, microcertification_asvs_df, evaluated_accounts_df)
+    
+    # 90% compliance should be Red (< 95% alert threshold)
+    assert result.iloc[0]["monitoring_metric_value"] == 90.0
+    assert result.iloc[0]["monitoring_metric_status"] == "Red"
 
 
 def test_no_evaluations_handling():

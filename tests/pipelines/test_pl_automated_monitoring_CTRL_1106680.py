@@ -5,7 +5,7 @@ from freezegun import freeze_time
 from datetime import datetime
 
 # Import pipeline components
-from pl_automated_monitoring_CTRL_1106680.pipeline import (
+from pl_automated_monitoring_ctrl_1106680.pipeline import (
     PLAutomatedMonitoringCTRL1106680,
     calculate_metrics
 )

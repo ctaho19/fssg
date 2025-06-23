@@ -25,10 +25,10 @@ system_accounts AS (
             WHEN ie.name IN ('detectedRoles', 'assignedRoles') THEN 'Bundle'
             ELSE 'Exception'
         END AS item_type
-    FROM identityiq.spt_identity i
-    LEFT JOIN identityiq.spt_link l ON l.identity_id = i.id
-    LEFT JOIN identityiq.spt_application a ON l.application = a.id
-    LEFT JOIN identityiq.spt_identity_entitlement ie 
+    FROM EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_IDENTITY i
+    LEFT JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_LINK l ON l.identity_id = i.id
+    LEFT JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_APPLICATION a ON l.application = a.id
+    LEFT JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_IDENTITY_ENTITLEMENT ie 
         ON l.application = ie.application 
         AND l.identity_id = ie.identity_id 
         AND l.native_identity = ie.native_identity
@@ -47,20 +47,16 @@ managed_attributes AS (
         ma.cof_ent_related_application,
         a.name AS application_name,
         a.id AS application_id
-    FROM identityiq.spt_managed_attribute ma
-    JOIN identityiq.spt_application a ON ma.application = a.id
+    FROM EIAM_DB.PHDP_EIAM_IDENTITYIQHIST.SPT_MANAGED_ATTRIBUTE ma
+    JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_APPLICATION a ON ma.application = a.id
 ),
 
--- Get certification exclusion rules
+-- DISABLED: certification_exclusion table not accessible in Snowflake
+-- This Oracle table contains configurable exclusion rules that cannot be accessed
+-- The query will run with hardcoded exclusion logic only
 exclusion_rules AS (
-    SELECT DISTINCT
-        type,
-        application,
-        attribute,
-        value,
-        certification_type
-    FROM iiqcap1.certification_exclusion
-    WHERE certification_type = 'SystemId_Q2'
+    SELECT NULL AS type, NULL AS application, NULL AS attribute, NULL AS value, NULL AS certification_type
+    WHERE FALSE -- Ensures no rows returned, disabling all exclusion_rules references
 ),
 
 -- Get actual certification results
@@ -83,12 +79,12 @@ actual_certifications AS (
             ELSE sptci.exception_attribute_value
         END AS value,
         'Inclusion' AS actual_result
-    FROM identityiq.spt_certification sptc
-    JOIN identityiq.spt_certification_entity sptce ON sptc.id = sptce.certification_id
-    LEFT JOIN identityiq.spt_certification_item sptci ON sptce.id = sptci.certification_entity_id
-    LEFT JOIN identityiq.spt_entitlement_snapshot es ON sptci.exception_entitlements = es.id
-    JOIN identityiq.spt_certification_tags ct ON sptc.id = ct.certification_id
-    JOIN identityiq.spt_tag t ON ct.elt = t.id
+    FROM EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_CERTIFICATION sptc
+    JOIN EIAM_DB.PHDP_EIAM_SKUNKWORKS_LATEST.SPT_CERTIFICATION_ENTITY sptce ON sptc.id = sptce.certification_id
+    LEFT JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQHIST.SPT_CERTIFICATION_ITEM sptci ON sptce.id = sptci.certification_entity_id
+    LEFT JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQHIST.SPT_ENTITLEMENT_SNAPSHOT es ON sptci.exception_entitlements = es.id
+    JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQHIST.SPT_CERTIFICATION_TAGS ct ON sptc.id = ct.certification_id
+    JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_TAG t ON ct.elt = t.id
     WHERE t.name IN (SELECT cert_tag FROM certification_config)
     
     UNION ALL
@@ -112,11 +108,11 @@ actual_certifications AS (
             ELSE saci.exception_attribute_value
         END AS value,
         'Exclusion' AS actual_result
-    FROM identityiq.spt_certification sptc
-    JOIN identityiq.spt_archived_cert_entity sace ON sptc.id = sace.certification_id
-    LEFT JOIN identityiq.spt_archived_cert_item saci ON sace.id = saci.parent_id
-    JOIN identityiq.spt_certification_tags ct ON sptc.id = ct.certification_id
-    JOIN identityiq.spt_tag t ON ct.elt = t.id
+    FROM EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_CERTIFICATION sptc
+    JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_ARCHIVED_CERT_ENTITY sace ON sptc.id = sace.certification_id
+    LEFT JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQHIST.SPT_ARCHIVED_CERT_ITEM saci ON sace.id = saci.parent_id
+    JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQHIST.SPT_CERTIFICATION_TAGS ct ON sptc.id = ct.certification_id
+    JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_TAG t ON ct.elt = t.id
     WHERE t.name IN (SELECT cert_tag FROM certification_config)
 ),
 
@@ -140,18 +136,10 @@ validation_results AS (
                     -- Application not marked for quarterly certification
                     WHEN sa.cof_app_certification_freq != 'Quarterly' 
                         THEN 'Exclusion'
-                    -- Application in exclusion list
-                    WHEN EXISTS (
-                        SELECT 1 FROM exclusion_rules er 
-                        WHERE er.type = 'applicationsToBeExcluded' 
-                        AND er.application = sa.application
-                    ) THEN 'Exclusion'
-                    -- Disabled account in specific applications
-                    WHEN sa.account_disable_flag = 'true' AND EXISTS (
-                        SELECT 1 FROM exclusion_rules er 
-                        WHERE er.type = 'disabledAccountApplicationsToBeExcluded' 
-                        AND er.application = sa.application
-                    ) THEN 'Exclusion'
+                    -- Application in exclusion list (DISABLED - Oracle table not accessible)
+                    WHEN FALSE THEN 'Exclusion'
+                    -- Disabled account in specific applications (DISABLED - Oracle table not accessible)
+                    WHEN FALSE THEN 'Exclusion'
                     ELSE 'Inclusion'
                 END
                 
@@ -160,26 +148,22 @@ validation_results AS (
                 CASE
                     -- Base type bundles
                     WHEN EXISTS (
-                        SELECT 1 FROM identityiq.spt_bundle b 
+                        SELECT 1 FROM EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_BUNDLE b 
                         WHERE b.name = sa.value AND b.type = 'base'
                     ) THEN 'Exclusion'
                     -- Team site/role exclusions
                     WHEN EXISTS (
-                        SELECT 1 FROM identityiq.spt_bundle b 
+                        SELECT 1 FROM EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_BUNDLE b 
                         WHERE b.name = sa.value 
                         AND b.type IN ('it', 'business')
                         AND (b.name LIKE '%_TEAM_SITE%' OR b.name LIKE '%_TEAM_ROLE%')
                     ) THEN 'Exclusion'
-                    -- Roles in exclusion list
-                    WHEN EXISTS (
-                        SELECT 1 FROM exclusion_rules er 
-                        WHERE er.type = 'rolesToBeExcluded' 
-                        AND er.value = sa.value
-                    ) THEN 'Exclusion'
+                    -- Roles in exclusion list (DISABLED - Oracle table not accessible)
+                    WHEN FALSE THEN 'Exclusion'
                     -- Detected role with assigned role exists
                     WHEN sa.attribute = 'detectedRoles' AND EXISTS (
-                        SELECT 1 FROM identityiq.spt_identity_entitlement ie2
-                        JOIN identityiq.spt_identity i2 ON i2.id = ie2.identity_id
+                        SELECT 1 FROM EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_IDENTITY_ENTITLEMENT ie2
+                        JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_IDENTITY i2 ON i2.id = ie2.identity_id
                         WHERE i2.name = sa.eid 
                         AND ie2.name = 'assignedRoles'
                         AND ie2.value = sa.value
@@ -190,14 +174,8 @@ validation_results AS (
             -- EXCEPTION TYPE RULES
             WHEN sa.item_type = 'Exception' THEN
                 CASE
-                    -- Entitlement in exclusion list
-                    WHEN EXISTS (
-                        SELECT 1 FROM exclusion_rules er 
-                        WHERE er.type = 'entitlementsToBeExcluded'
-                        AND er.application = sa.application
-                        AND UPPER(er.value) = UPPER(sa.value)
-                        AND UPPER(er.attribute) = UPPER(sa.attribute)
-                    ) THEN 'Exclusion'
+                    -- Entitlement in exclusion list (DISABLED - Oracle table not accessible)
+                    WHEN FALSE THEN 'Exclusion'
                     -- AD non-requestable entitlements
                     WHEN sa.application = 'Active Directory' AND EXISTS (
                         SELECT 1 FROM managed_attributes ma
@@ -214,19 +192,8 @@ validation_results AS (
                     WHEN sa.application = 'AWS IAM User/Role Request' 
                         AND sa.native_identity IS NULL
                         THEN 'Exclusion'
-                    -- Disabled account entitlements
-                    WHEN EXISTS (
-                        SELECT 1 FROM identityiq.spt_link l2
-                        JOIN identityiq.spt_application a2 ON l2.application = a2.id
-                        WHERE a2.name = sa.application
-                        AND l2.native_identity = sa.native_identity
-                        AND l2.iiq_disabled = '1'
-                        AND EXISTS (
-                            SELECT 1 FROM exclusion_rules er 
-                            WHERE er.type = 'disabledAccountApplicationsToBeExcluded'
-                            AND er.application = sa.application
-                        )
-                    ) THEN 'Exclusion'
+                    -- Disabled account entitlements (DISABLED - Oracle table not accessible)
+                    WHEN FALSE THEN 'Exclusion'
                     ELSE 'Inclusion'
                 END
                 
@@ -241,39 +208,27 @@ validation_results AS (
                         THEN 'Account Only effective application is "Active Directory" and it is not requestable'
                     WHEN sa.cof_app_certification_freq != 'Quarterly' 
                         THEN 'Application not marked for quarterly certification'
-                    WHEN EXISTS (
-                        SELECT 1 FROM exclusion_rules er 
-                        WHERE er.type = 'applicationsToBeExcluded' 
-                        AND er.application = sa.application
-                    ) THEN 'Application in exclusion list'
-                    WHEN sa.account_disable_flag = 'true' AND EXISTS (
-                        SELECT 1 FROM exclusion_rules er 
-                        WHERE er.type = 'disabledAccountApplicationsToBeExcluded' 
-                        AND er.application = sa.application
-                    ) THEN 'Disabled account in excluded application'
+                    WHEN FALSE THEN 'Application in exclusion list (DISABLED)'
+                    WHEN FALSE THEN 'Disabled account in excluded application (DISABLED)'
                     ELSE 'No exclusion found'
                 END
                 
             WHEN sa.item_type = 'Bundle' THEN
                 CASE
                     WHEN EXISTS (
-                        SELECT 1 FROM identityiq.spt_bundle b 
+                        SELECT 1 FROM EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_BUNDLE b 
                         WHERE b.name = sa.value AND b.type = 'base'
                     ) THEN 'Base type bundle'
                     WHEN EXISTS (
-                        SELECT 1 FROM identityiq.spt_bundle b 
+                        SELECT 1 FROM EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_BUNDLE b 
                         WHERE b.name = sa.value 
                         AND b.type IN ('it', 'business')
                         AND (b.name LIKE '%_TEAM_SITE%' OR b.name LIKE '%_TEAM_ROLE%')
                     ) THEN 'Team site/role exclusion'
-                    WHEN EXISTS (
-                        SELECT 1 FROM exclusion_rules er 
-                        WHERE er.type = 'rolesToBeExcluded' 
-                        AND er.value = sa.value
-                    ) THEN 'Role in exclusion list'
+                    WHEN FALSE THEN 'Role in exclusion list (DISABLED)'
                     WHEN sa.attribute = 'detectedRoles' AND EXISTS (
-                        SELECT 1 FROM identityiq.spt_identity_entitlement ie2
-                        JOIN identityiq.spt_identity i2 ON i2.id = ie2.identity_id
+                        SELECT 1 FROM EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_IDENTITY_ENTITLEMENT ie2
+                        JOIN EIAM_DB.PHDP_EIAM_IDENTITYIQ.SPT_IDENTITY i2 ON i2.id = ie2.identity_id
                         WHERE i2.name = sa.eid 
                         AND ie2.name = 'assignedRoles'
                         AND ie2.value = sa.value
@@ -283,13 +238,7 @@ validation_results AS (
                 
             WHEN sa.item_type = 'Exception' THEN
                 CASE
-                    WHEN EXISTS (
-                        SELECT 1 FROM exclusion_rules er 
-                        WHERE er.type = 'entitlementsToBeExcluded'
-                        AND er.application = sa.application
-                        AND UPPER(er.value) = UPPER(sa.value)
-                        AND UPPER(er.attribute) = UPPER(sa.attribute)
-                    ) THEN 'Entitlement in COF Certification Exclusion Custom'
+                    WHEN FALSE THEN 'Entitlement in COF Certification Exclusion Custom (DISABLED)'
                     WHEN sa.application = 'Active Directory' AND EXISTS (
                         SELECT 1 FROM managed_attributes ma
                         WHERE ma.application_name = sa.application
@@ -303,18 +252,7 @@ validation_results AS (
                     WHEN sa.application = 'AWS IAM User/Role Request' 
                         AND sa.native_identity IS NULL
                         THEN 'AWS IAM User/Role Request without awsAccountList'
-                    WHEN EXISTS (
-                        SELECT 1 FROM identityiq.spt_link l2
-                        JOIN identityiq.spt_application a2 ON l2.application = a2.id
-                        WHERE a2.name = sa.application
-                        AND l2.native_identity = sa.native_identity
-                        AND l2.iiq_disabled = '1'
-                        AND EXISTS (
-                            SELECT 1 FROM exclusion_rules er 
-                            WHERE er.type = 'disabledAccountApplicationsToBeExcluded'
-                            AND er.application = sa.application
-                        )
-                    ) THEN 'Disabled account entitlement'
+                    WHEN FALSE THEN 'Disabled account entitlement (DISABLED)'
                     ELSE 'No exclusion found'
                 END
                 
