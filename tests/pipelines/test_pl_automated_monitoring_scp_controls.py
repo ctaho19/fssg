@@ -153,6 +153,11 @@ def generate_mock_api_response(content=None, status_code=200):
 @freeze_time("2024-11-05 12:09:00")
 def test_calculate_metrics_multi_control_success():
     """Test successful metrics calculation for multiple SCP controls"""
+    # DEBUG: Inspect what method signature is actually loaded at runtime
+    import inspect
+    print(f"\nDEBUG: Loading PLAutomatedMonitoringScpControls from: {inspect.getfile(PLAutomatedMonitoringScpControls)}")
+    print(f"DEBUG: Runtime signature is: {inspect.signature(PLAutomatedMonitoringScpControls._calculate_metrics)}\n")
+    
     env = MockEnv()
     pipeline = PLAutomatedMonitoringScpControls(env)
     
