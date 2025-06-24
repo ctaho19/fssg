@@ -1,4 +1,7 @@
+"""CloudRadar Controls Pipeline - Monitoring for multiple controls via CloudRadar API."""
+
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -10,6 +13,8 @@ from connectors.api import OauthApi
 from connectors.ca_certs import C1_CERT_FILE
 from connectors.exchange.oauth_token import refresh
 from etip_env import Env
+
+logger = logging.getLogger(__name__)
 
 # Control configuration mapping for CloudRadar-based controls
 CONTROL_CONFIGS = {
@@ -38,6 +43,11 @@ CONTROL_CONFIGS = {
         "description": "KMS Key Origin",
     },
 }
+
+# Temporary overrides for known KMS key data quality issues
+# TODO: Remove when CloudRadar reporting is corrected
+# Values: "COMPLIANT", "NON_COMPLIANT", or "EXCLUDE"
+KMS_KEY_OVERRIDES = {}
 
 
 def run(env: Env, is_load: bool = True, dq_actions: bool = True):
@@ -296,6 +306,34 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
         
         return None
     
+    def _apply_kms_overrides(self, resources: List[Dict]) -> List[Dict]:
+        """Apply temporary overrides for KMS keys with known data quality issues."""
+        if not KMS_KEY_OVERRIDES:
+            return resources
+        
+        result = []
+        override_stats = {"excluded": 0, "overridden": 0}
+        
+        for resource in resources:
+            arn = resource.get("amazonResourceName", "")
+            override = KMS_KEY_OVERRIDES.get(arn)
+            
+            if override == "EXCLUDE":
+                override_stats["excluded"] += 1
+                continue
+            elif override in ("COMPLIANT", "NON_COMPLIANT"):
+                resource = resource.copy()
+                resource["_override"] = override
+                result.append(resource)
+                override_stats["overridden"] += 1
+            else:
+                result.append(resource)
+        
+        if any(override_stats.values()):
+            logger.info(f"KMS overrides applied: {override_stats}")
+        
+        return result
+
     def _calculate_control_compliance(
         self,
         control_id: str,
@@ -307,7 +345,11 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
         now = datetime.now()
         results = []
 
-# Apply resource exclusions
+        # Apply overrides for known data quality issues
+        if control_id == "CTRL-1077224" and KMS_KEY_OVERRIDES:
+            resources = self._apply_kms_overrides(resources)
+
+        # Apply resource exclusions
         filtered_resources = self._apply_resource_exclusions(resources, control_config)
         
         # Process each threshold (Tier 1 and Tier 2)
@@ -337,7 +379,10 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
                 config_value = self._get_config_value(resource, control_config)
                 is_compliant = False
 
-                if "Tier 1" in tier:
+                # Check for override
+                if "_override" in resource:
+                    is_compliant = resource["_override"] == "COMPLIANT"
+                elif "Tier 1" in tier:
                     #Tier 1: Check if configuration exists and has value
                     is_compliant = (
                         config_value is not None and str(config_value).strip()
