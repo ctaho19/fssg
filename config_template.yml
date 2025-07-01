@@ -1,0 +1,200 @@
+# ======================================================================
+# Production Configuration Template
+# ======================================================================
+# This file serves as the canonical reference for how every `config.yml`
+# should be structured when targeting the PROD environment.
+#
+# • Replace values wrapped in <ANGLE_BRACKETS> with concrete values.
+# • Add or remove blocks as required by the specific pipeline, but DO NOT
+#   alter the overall nesting structure.
+# • All keys shown here are expected by the orchestration framework.
+# ======================================================================
+
+pipeline:
+  name: <PIPELINE_NAME>                              # e.g. pl_automated_monitoring_machine_iam_preventative
+  use_test_data_on_nonprod: false                    # Always FALSE for PROD
+  dg_strict_mode: false                              # Toggle data-governance strict mode if required
+
+  environments:
+    business_application: <BUSINESS_APPLICATION_CODE> # e.g. BAENTERPRISETECHINSIGHTS
+    Prod:
+      # ──────────────────────────────────────────────
+      # Add any Prod-specific environment settings
+      # ──────────────────────────────────────────────
+      # account : <AWS_ACCOUNT_ID>
+      # region  : <AWS_REGION>
+      # …
+
+# ----------------------------------------------------------------------
+# Pipeline Stages
+# ----------------------------------------------------------------------
+stages:
+
+  # 1️⃣ EXTRACT ─────────────────────────────────────────────────────────
+  extract:
+    thresholds_raw:
+      all_iam_roles:
+        connector: snowflake
+        options:
+          sql: "@text:sql/all_iam_roles.sql"            # Update if path differs
+
+      evaluated_roles:
+        connector: snowflake
+        options:
+          sql: "@text:sql/evaluated_roles.sql"
+
+  # 2️⃣ INGRESS VALIDATION ──────────────────────────────────────────────
+  ingress_validation:
+
+    thresholds_raw:
+      - type: schema_check
+        fatal: false
+        informational: true
+        envs: [prod]
+        options:
+          data_location: Snowflake
+          dataset_id: <DATASET_ID>                      # GUID of Snowflake dataset
+          attribute_map:                                # Map source → expected column names
+            monitoring_metric_id   : monitoring_metric_id
+            control_id             : control_id
+            monitoring_metric_tier : monitoring_metric_tier
+            metric_name            : metric_name
+            metric_description     : metric_description
+            warning_threshold      : warning_threshold
+            alerting_threshold     : alerting_threshold
+            control_executor       : control_executor
+
+      - type: count_check
+        fatal: true                                     # Hard-fail on mismatch
+        envs: [prod]
+        options:
+          data_location: Snowflake
+          table_names:
+            - <FQ_TABLE_NAME>                           # Fully-qualified table
+
+    all_iam_roles:
+      - type: schema_check
+        fatal: false
+        informational: true
+        envs: [prod]
+        options:
+          data_location: Snowflake
+          dataset_id: <DATASET_ID>
+          attribute_map:
+            RESOURCE_ID         : RESOURCE_ID
+            AMAZON_RESOURCE_NAME: AMAZON_RESOURCE_NAME
+            BA                  : BA
+            ACCOUNT             : ACCOUNT
+            CREATE_DATE         : CREATE_DATE
+            TYPE                : TYPE
+            FULL_RECORD         : FULL_RECORD
+            ROLE_TYPE           : ROLE_TYPE
+            SF_LOAD_TIMESTAMP   : SF_LOAD_TIMESTAMP
+            LOAD_TIMESTAMP      : LOAD_TIMESTAMP
+
+      - type: count_check
+        fatal: true
+        envs: [prod]
+        options:
+          data_location: Snowflake
+          threshold: 1
+          table_name: <FQ_TABLE_NAME>
+
+    evaluated_roles:
+      - type: schema_check
+        fatal: false
+        informational: true
+        envs: [prod]
+        options:
+          data_location: Snowflake
+          dataset_id: <DATASET_ID>
+          attribute_map:
+            RESOURCE_NAME     : RESOURCE_NAME
+            COMPLIANCE_STATUS : COMPLIANCE_STATUS
+            CONTROL_ID        : CONTROL_ID
+
+      - type: count_check
+        fatal: false
+        informational: true
+        envs: [prod]
+        options:
+          data_location: Snowflake
+          threshold: 1
+          table_name: <FQ_TABLE_NAME>
+
+  # 3️⃣ TRANSFORM ───────────────────────────────────────────────────────
+  transform: {}
+    # Insert transformation logic or leave blank if N/A
+
+  # 4️⃣ EGRESS VALIDATION ───────────────────────────────────────────────
+  egress_validation:
+    monitoring_metrics:
+      - type: schema_check
+        fatal: false
+        informational: true
+        envs: [prod]
+        options:
+          data_location: OneStream
+          dataset_id: <DATASET_ID>
+          attribute_map:
+            control_monitoring_utc_timestamp: control_monitoring_utc_timestamp
+            control_id                       : control_id
+            monitoring_metric_value          : monitoring_metric_value
+            monitoring_metric_status         : monitoring_metric_status
+            metric_value_numerator           : metric_value_numerator
+            metric_value_denominator         : metric_value_denominator
+
+      - type: count_check
+        fatal: false
+        informational: true
+        envs: [prod]
+        options:
+          data_location: OneStream
+          table_names:
+            - etip_controls_monitoring_metrics
+          threshold: 1
+
+  # 5️⃣ CONSISTENCY CHECKS ──────────────────────────────────────────────
+  consistency_checks:
+    - ingress: thresholds_raw
+      egress: monitoring_metrics
+      type: count_consistency_check
+      options:
+        data_location       : OneStream
+        table_names         : [etip_controls_monitoring_metrics_details table (thats the prod threshold table)]
+        source_data_location: Snowflake
+        source_table_names  : [<FQ_TABLE_NAME>]
+      fatal: false
+      informational: true
+      envs: [prod]
+
+    - ingress: all_iam_roles
+      egress: monitoring_metrics
+      type: count_consistency_check
+      options:
+        data_location       : OneStream
+        table_names         : [dataset name]
+        source_data_location: Snowflake
+        source_table_name   : <FQ_TABLE_NAME>
+      fatal: false
+      informational: true
+      envs: [prod]
+
+    - ingress: evaluated_roles
+      egress: monitoring_metrics
+      type: count_consistency_check
+      options:
+        data_location       : OneStream
+        table_names         : [dataset name]
+        source_data_location: Snowflake
+        source_table_names  : [<FQ_TABLE_NAME>]
+      fatal: false
+      informational: true
+      envs: [prod]
+
+  # 6️⃣ LOAD ────────────────────────────────────────────────────────────
+  load: {}
+
+# ======================================================================
+# End of template – customise as necessary for individual pipelines.
+# ======================================================================
