@@ -1,9 +1,17 @@
+# ======================================================================
+# Production Configuration - DLP Controls Pipeline
+# ======================================================================
+# Consolidated monitoring pipeline for DLP controls across multiple platforms:
+# CTRL-1080553 (Proofpoint), CTRL-1101994 (Symantec Proxy), CTRL-1077197 (Slack CloudSOC)
+# ======================================================================
+
 pipeline:
   name: pl_automated_monitoring_dlp_controls
   use_test_data_on_nonprod: false
   dq_strict_mode: false
 
 environments:
+  business_application: BAENTERPRISETECHINSIGHTS
   prod:
     extract:
       thresholds_raw:
@@ -42,15 +50,18 @@ environments:
             avro_schema: "@json:avro_schema.json"
             business_application: BAENTERPRISETECHINSIGHTS
 
+# ----------------------------------------------------------------------
+# Pipeline Stages
+# ----------------------------------------------------------------------
 stages:
   - name: ingress_validation
     description: "Validate data quality of input datasets"
     envs: [local, prod]
   - name: extract
-    description: "Extract data from Snowflake"
+    description: "Extract data from Snowflake and external data sources"
     envs: [local, prod]
   - name: transform
-    description: "Calculate control metrics"
+    description: "Calculate DLP control metrics across all platforms"
     envs: [local, prod]
   - name: egress_validation
     description: "Validate transformed metrics before loading"
@@ -59,7 +70,9 @@ stages:
     description: "Load metrics to OneStream"
     envs: [local, prod]
 
-# REQUIRED: Comprehensive Data Quality Validation
+# ----------------------------------------------------------------------
+# Ingress Validation
+# ----------------------------------------------------------------------
 ingress_validation:
   thresholds_raw:
     - type: schema_check
@@ -67,28 +80,33 @@ ingress_validation:
       informational: true
       envs: [local, prod]
       options:
-        required_columns:
-          - monitoring_metric_id
-          - control_id
-          - monitoring_metric_tier
-          - metric_name
-          - metric_description
-          - warning_threshold
-          - alerting_threshold
-          - control_executor
+        data_location: Snowflake
+        dataset_id: ETIP_CONTROLS_MONITORING_METRICS_DETAILS
+        attribute_map:
+          monitoring_metric_id: monitoring_metric_id
+          control_id: control_id
+          monitoring_metric_tier: monitoring_metric_tier
+          metric_name: metric_name
+          metric_description: metric_description
+          warning_threshold: warning_threshold
+          alerting_threshold: alerting_threshold
+          control_executor: control_executor
+
     - type: count_check
       fatal: true
       envs: [local, prod]
       options:
         data_location: Snowflake
         threshold: 1
+        table_names: [etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details]
+
     - type: consistency_check
       fatal: false
       informational: true
       envs: [local, prod]
       options:
         check_type: "data_freshness"
-        description: "Ingress data quality check"
+        description: "Ingress data quality check for control thresholds"
 
   dlp_outcome:
     - type: schema_check
@@ -96,21 +114,26 @@ ingress_validation:
       informational: true
       envs: [local, prod]
       options:
-        required_columns:
-          - TEST_ID
-          - TEST_NAME
-          - PLATFORM
-          - EXPECTED_OUTCOME
-          - ACTUAL_OUTCOME
-          - TEST_DESCRIPTION
-          - SF_LOAD_TIMESTAMP
+        data_location: Snowflake
+        dataset_id: OUTCOME_MONITORING_STORAGE
+        attribute_map:
+          TEST_ID: TEST_ID
+          TEST_NAME: TEST_NAME
+          PLATFORM: PLATFORM
+          EXPECTED_OUTCOME: EXPECTED_OUTCOME
+          ACTUAL_OUTCOME: ACTUAL_OUTCOME
+          TEST_DESCRIPTION: TEST_DESCRIPTION
+          SF_LOAD_TIMESTAMP: SF_LOAD_TIMESTAMP
+
     - type: count_check
-      fatal: false
-      informational: true
+      fatal: true
+      informational: false
       envs: [local, prod]
       options:
         data_location: Snowflake
         threshold: 1
+        table_names: [CYBR_DB.PHDP_CYBR.outcome_monitoring_storage]
+
     - type: consistency_check
       fatal: false
       informational: true
@@ -118,6 +141,14 @@ ingress_validation:
       options:
         description: "DLP outcome data quality check across all platforms"
 
+# ----------------------------------------------------------------------
+# Transform
+# ----------------------------------------------------------------------
+transform: {}
+
+# ----------------------------------------------------------------------
+# Egress Validation
+# ----------------------------------------------------------------------
 egress_validation:
   monitoring_metrics:
     - type: schema_check
@@ -125,21 +156,67 @@ egress_validation:
       informational: true
       envs: [local, prod]
       options:
-        required_columns:
-          - control_monitoring_utc_timestamp
-          - control_id
-          - monitoring_metric_id
-          - monitoring_metric_value
-          - monitoring_metric_status
-          - metric_value_numerator
-          - metric_value_denominator
+        data_location: OneStream
+        dataset_id: ETIP_CONTROLS_MONITORING_METRICS
+        attribute_map:
+          control_monitoring_utc_timestamp: control_monitoring_utc_timestamp
+          control_id: control_id
+          monitoring_metric_id: monitoring_metric_id
+          monitoring_metric_value: monitoring_metric_value
+          monitoring_metric_status: monitoring_metric_status
+          metric_value_numerator: metric_value_numerator
+          metric_value_denominator: metric_value_denominator
+
     - type: count_check
       fatal: false
       informational: true
       envs: [local, prod]
+      options:
+        data_location: OneStream
+        table_names:
+          - etip_controls_monitoring_metrics
+        threshold: 1
+
     - type: consistency_check
       fatal: false
       informational: true
       envs: [local, prod]
       options:
-        description: "Egress data will not match ingress data due to metric calculations"
+        description: "Egress data will not match ingress data due to DLP metric calculations"
+
+# ----------------------------------------------------------------------
+# Consistency Checks
+# ----------------------------------------------------------------------
+consistency_checks:
+  - ingress: thresholds_raw
+    egress: monitoring_metrics
+    type: count_consistency_check
+    options:
+      data_location: OneStream
+      table_names: [etip_controls_monitoring_metrics]
+      source_data_location: Snowflake
+      source_table_names: [etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details]
+    fatal: false
+    informational: true
+    envs: [local, prod]
+
+  - ingress: dlp_outcome
+    egress: monitoring_metrics
+    type: count_consistency_check
+    options:
+      data_location: OneStream
+      table_names: [etip_controls_monitoring_metrics]
+      source_data_location: Snowflake
+      source_table_names: [CYBR_DB.PHDP_CYBR.outcome_monitoring_storage]
+    fatal: false
+    informational: true
+    envs: [local, prod]
+
+# ----------------------------------------------------------------------
+# Load
+# ----------------------------------------------------------------------
+load: {}
+
+# ======================================================================
+# End of DLP Controls Pipeline Configuration
+# ======================================================================

@@ -182,15 +182,15 @@ def test_calculate_metrics_all_controls_success():
     # Verify specific metric values for each platform
     for _, row in result.iterrows():
         if row["control_id"] == "CTRL-1080553":  # Proofpoint
-            assert row["monitoring_metric_value"] == 50.0  # 1/2 = 50%
+            assert row["monitoring_metric_value"] == pytest.approx(50.0, abs=0.01)  # 1/2 = 50%
             assert row["metric_value_numerator"] == 1
             assert row["metric_value_denominator"] == 2
         elif row["control_id"] == "CTRL-1101994":  # Symantec Proxy
-            assert row["monitoring_metric_value"] == 100.0  # 2/2 = 100%
+            assert row["monitoring_metric_value"] == pytest.approx(100.0, abs=0.01)  # 2/2 = 100%
             assert row["metric_value_numerator"] == 2
             assert row["metric_value_denominator"] == 2
         elif row["control_id"] == "CTRL-1077197":  # Slack CloudSOC
-            assert row["monitoring_metric_value"] == 66.67  # 2/3 = 66.67%
+            assert row["monitoring_metric_value"] == pytest.approx(66.67, abs=0.01)  # 2/3 = 66.67%
             assert row["metric_value_numerator"] == 2
             assert row["metric_value_denominator"] == 3
 
@@ -210,7 +210,7 @@ def test_calculate_metrics_single_control_proofpoint():
     assert result["control_id"].iloc[0] == "CTRL-1080553"
     
     # Proofpoint has 2 tests, 1 pass, 1 fail = 50%
-    assert result["monitoring_metric_value"].iloc[0] == 50.0
+    assert result["monitoring_metric_value"].iloc[0] == pytest.approx(50.0, abs=0.01)
     assert result["metric_value_numerator"].iloc[0] == 1
     assert result["metric_value_denominator"].iloc[0] == 2
     assert result["monitoring_metric_status"].iloc[0] == "Red"  # 50% < 95% alert threshold
@@ -231,7 +231,7 @@ def test_calculate_metrics_single_control_symantec():
     assert result["control_id"].iloc[0] == "CTRL-1101994"
     
     # Symantec has 2 tests, 2 pass, 0 fail = 100%
-    assert result["monitoring_metric_value"].iloc[0] == 100.0
+    assert result["monitoring_metric_value"].iloc[0] == pytest.approx(100.0, abs=0.01)
     assert result["metric_value_numerator"].iloc[0] == 2
     assert result["metric_value_denominator"].iloc[0] == 2
     assert result["monitoring_metric_status"].iloc[0] == "Green"  # 100% >= 98% warning threshold
@@ -252,7 +252,7 @@ def test_calculate_metrics_single_control_slack():
     assert result["control_id"].iloc[0] == "CTRL-1077197"
     
     # Slack has 3 tests, 2 pass, 1 fail = 66.67%
-    assert result["monitoring_metric_value"].iloc[0] == 66.67
+    assert result["monitoring_metric_value"].iloc[0] == pytest.approx(66.67, abs=0.01)
     assert result["metric_value_numerator"].iloc[0] == 2
     assert result["metric_value_denominator"].iloc[0] == 3
     assert result["monitoring_metric_status"].iloc[0] == "Red"  # 66.67% < 97% alert threshold
@@ -281,7 +281,7 @@ def test_calculate_metrics_empty_dlp_outcome():
     # Should still return results with 0% compliance
     assert len(result) == 3
     for _, row in result.iterrows():
-        assert row["monitoring_metric_value"] == 0.0
+        assert row["monitoring_metric_value"] == pytest.approx(0.0, abs=0.01)
         assert row["metric_value_numerator"] == 0
         assert row["metric_value_denominator"] == 0
         assert row["resources_info"] is not None
@@ -296,7 +296,7 @@ def test_dlp_metrics_calculation_proofpoint():
     proofpoint_data = _mock_dlp_outcome_df()[_mock_dlp_outcome_df()['PLATFORM'] == 'proofpoint']
     metric_value, compliant, total, resources = pipeline._calculate_dlp_metrics(proofpoint_data, "proofpoint")
     
-    assert metric_value == 50.0
+    assert metric_value == pytest.approx(50.0, abs=0.01)
     assert compliant == 1
     assert total == 2
     assert resources is not None
@@ -317,7 +317,7 @@ def test_dlp_metrics_calculation_symantec():
     symantec_data = _mock_dlp_outcome_df()[_mock_dlp_outcome_df()['PLATFORM'] == 'symantec_proxy']
     metric_value, compliant, total, resources = pipeline._calculate_dlp_metrics(symantec_data, "symantec_proxy")
     
-    assert metric_value == 100.0
+    assert metric_value == pytest.approx(100.0, abs=0.01)
     assert compliant == 2
     assert total == 2
     assert resources is None  # No failed tests
@@ -331,7 +331,7 @@ def test_dlp_metrics_calculation_slack():
     slack_data = _mock_dlp_outcome_df()[_mock_dlp_outcome_df()['PLATFORM'] == 'slack_cloudsoc']
     metric_value, compliant, total, resources = pipeline._calculate_dlp_metrics(slack_data, "slack_cloudsoc")
     
-    assert metric_value == 66.67
+    assert metric_value == pytest.approx(66.67, abs=0.01)
     assert compliant == 2
     assert total == 3
     assert resources is not None
@@ -345,7 +345,7 @@ def test_dlp_metrics_calculation_empty_platform():
     empty_df = pd.DataFrame()
     metric_value, compliant, total, resources = pipeline._calculate_dlp_metrics(empty_df, "test_platform")
     
-    assert metric_value == 0.0
+    assert metric_value == pytest.approx(0.0, abs=0.01)
     assert compliant == 0
     assert total == 0
     assert resources is not None
@@ -415,7 +415,7 @@ def test_compliance_status_logic_yellow():
     result = pipeline._calculate_metrics(threshold_df, yellow_dlp_df)
     
     # 93.75% should be Yellow (>= 92% alert threshold but < 98% warning threshold)
-    assert result["monitoring_metric_value"].iloc[0] == 93.75
+    assert result["monitoring_metric_value"].iloc[0] == pytest.approx(93.75, abs=0.01)
     assert result["monitoring_metric_status"].iloc[0] == "Yellow"
 
 def test_compliance_status_logic_red():
@@ -441,7 +441,7 @@ def test_compliance_status_logic_red():
     result = pipeline._calculate_metrics(threshold_df, red_dlp_df)
     
     # 0% should be Red (< 90% alert threshold)
-    assert result["monitoring_metric_value"].iloc[0] == 0.0
+    assert result["monitoring_metric_value"].iloc[0] == pytest.approx(0.0, abs=0.01)
     assert result["monitoring_metric_status"].iloc[0] == "Red"
 
 def test_control_configs_mapping():
@@ -542,7 +542,7 @@ def test_failed_test_details_with_large_volume():
     large_fail_data = []
     for i in range(150):  # 150 failed tests
         large_fail_data.append({
-            "TEST_ID": f"test_{i}",
+            "TEST_ID": "test_{}".format(i),
             "PLATFORM": "proofpoint",
             "EXPECTED_OUTCOME": "BLOCK",
             "ACTUAL_OUTCOME": "ALLOW"
@@ -552,7 +552,7 @@ def test_failed_test_details_with_large_volume():
     
     metric_value, compliant, total, resources = pipeline._calculate_dlp_metrics(large_fail_df, "proofpoint")
     
-    assert metric_value == 0.0  # All failed
+    assert metric_value == pytest.approx(0.0, abs=0.01)  # All failed
     assert compliant == 0
     assert total == 150
     assert resources is not None

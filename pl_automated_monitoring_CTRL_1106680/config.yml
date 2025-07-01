@@ -1,109 +1,16 @@
+# ======================================================================
+# Production Configuration - Machine IAM Preventative Pipeline
+# ======================================================================
+# Monitoring pipeline for CTRL-1106680: Machine IAM Preventative Controls
+# ======================================================================
+
 pipeline:
   name: pl_automated_monitoring_CTRL_1106680
   use_test_data_on_nonprod: false
   dq_strict_mode: false
-  stages:
-    # REQUIRED: Comprehensive Data Quality Validation
-    ingress_validation:
-      thresholds_raw:
-        - type: schema_check
-          fatal: false
-          informational: true
-          envs: [local, prod]
-          options:
-            required_columns:
-              - monitoring_metric_id
-              - control_id
-              - monitoring_metric_tier
-              - metric_name
-              - metric_description
-              - warning_threshold
-              - alerting_threshold
-              - control_executor
-        - type: count_check
-          fatal: true
-          envs: [local, prod]
-          options:
-            data_location: Snowflake
-            threshold: 1
-        - type: consistency_check
-          fatal: false
-          informational: true
-          envs: [local, prod]
-          options:
-            check_type: "data_freshness"
-            description: "Ingress data quality check"
-    
-      in_scope_roles:
-        - type: schema_check
-          fatal: false
-          informational: true
-          envs: [local, prod]
-          options:
-            required_columns:
-              - AMAZON_RESOURCE_NAME
-        - type: count_check
-          fatal: true
-          envs: [local, prod]
-          options:
-            data_location: Snowflake
-            threshold: 1
-        - type: consistency_check
-          fatal: false
-          informational: true
-          envs: [local, prod]
-          options:
-            description: "In-scope roles data quality check"
-    
-      evaluated_roles:
-        - type: schema_check
-          fatal: false
-          informational: true
-          envs: [local, prod]
-          options:
-            required_columns:
-              - RESOURCE_NAME
-        - type: count_check
-          fatal: false
-          informational: true
-          envs: [local, prod]
-          options:
-            data_location: Snowflake
-            threshold: 1
-        - type: consistency_check
-          fatal: false
-          informational: true
-          envs: [local, prod]
-          options:
-            description: "Evaluated roles data quality check"
-    
-    egress_validation:
-      monitoring_metrics:
-        - type: schema_check
-          fatal: false
-          informational: true
-          envs: [local, prod]
-          options:
-            required_columns:
-              - control_monitoring_utc_timestamp
-              - control_id
-              - monitoring_metric_id
-              - monitoring_metric_value
-              - monitoring_metric_status
-              - metric_value_numerator
-              - metric_value_denominator
-        - type: count_check
-          fatal: false
-          informational: true
-          envs: [local, prod]
-        - type: consistency_check
-          fatal: false
-          informational: true
-          envs: [local, prod]
-          options:
-            description: "Egress data will not match ingress data due to metric calculations"
 
 environments:
+  business_application: BAENTERPRISETECHINSIGHTS
   prod:
     extract:
       thresholds_raw:
@@ -149,3 +56,206 @@ environments:
             file_type: AVRO
             avro_schema: "@json:avro_schema.json"
             business_application: BAENTERPRISETECHINSIGHTS
+
+# ----------------------------------------------------------------------
+# Pipeline Stages
+# ----------------------------------------------------------------------
+stages:
+  - name: ingress_validation
+    description: "Validate data quality of input datasets"
+    envs: [local, prod]
+  - name: extract
+    description: "Extract data from Snowflake sources"
+    envs: [local, prod]
+  - name: transform
+    description: "Calculate machine IAM preventative control metrics"
+    envs: [local, prod]
+  - name: egress_validation
+    description: "Validate transformed metrics before loading"
+    envs: [local, prod]
+  - name: load
+    description: "Load metrics to OneStream"
+    envs: [local, prod]
+
+# ----------------------------------------------------------------------
+# Ingress Validation
+# ----------------------------------------------------------------------
+ingress_validation:
+  thresholds_raw:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        dataset_id: ETIP_CONTROLS_MONITORING_METRICS_DETAILS
+        attribute_map:
+          monitoring_metric_id: monitoring_metric_id
+          control_id: control_id
+          monitoring_metric_tier: monitoring_metric_tier
+          metric_name: metric_name
+          metric_description: metric_description
+          warning_threshold: warning_threshold
+          alerting_threshold: alerting_threshold
+          control_executor: control_executor
+
+    - type: count_check
+      fatal: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+        table_names: [etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details]
+
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        check_type: "data_freshness"
+        description: "Ingress data quality check for control thresholds"
+
+  in_scope_roles:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        dataset_id: IAM_ROLES_IN_SCOPE
+        attribute_map:
+          AMAZON_RESOURCE_NAME: AMAZON_RESOURCE_NAME
+
+    - type: count_check
+      fatal: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+        table_names: [EIAM_DB.PHDP_CYBR_IAM.IDENTITY_REPORTS_IAM_RESOURCE_V3]
+
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        description: "In-scope IAM roles data quality check"
+
+  evaluated_roles:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        dataset_id: IAM_ROLES_EVALUATED
+        attribute_map:
+          RESOURCE_NAME: RESOURCE_NAME
+
+    - type: count_check
+      fatal: true
+      informational: false
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+        table_names: [EIAM_DB.PHDP_CYBR_IAM.IDENTITY_REPORTS_CONTROLS_VIOLATIONS_STREAM_V2]
+
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        description: "Evaluated IAM roles data quality check"
+
+# ----------------------------------------------------------------------
+# Transform
+# ----------------------------------------------------------------------
+transform: {}
+
+# ----------------------------------------------------------------------
+# Egress Validation
+# ----------------------------------------------------------------------
+egress_validation:
+  monitoring_metrics:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        data_location: OneStream
+        dataset_id: ETIP_CONTROLS_MONITORING_METRICS
+        attribute_map:
+          control_monitoring_utc_timestamp: control_monitoring_utc_timestamp
+          control_id: control_id
+          monitoring_metric_id: monitoring_metric_id
+          monitoring_metric_value: monitoring_metric_value
+          monitoring_metric_status: monitoring_metric_status
+          metric_value_numerator: metric_value_numerator
+          metric_value_denominator: metric_value_denominator
+
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        data_location: OneStream
+        table_names:
+          - etip_controls_monitoring_metrics
+        threshold: 1
+
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        description: "Egress data will not match ingress data due to IAM metric calculations"
+
+# ----------------------------------------------------------------------
+# Consistency Checks
+# ----------------------------------------------------------------------
+consistency_checks:
+  - ingress: thresholds_raw
+    egress: monitoring_metrics
+    type: count_consistency_check
+    options:
+      data_location: OneStream
+      table_names: [etip_controls_monitoring_metrics]
+      source_data_location: Snowflake
+      source_table_names: [etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details]
+    fatal: false
+    informational: true
+    envs: [local, prod]
+
+  - ingress: in_scope_roles
+    egress: monitoring_metrics
+    type: count_consistency_check
+    options:
+      data_location: OneStream
+      table_names: [etip_controls_monitoring_metrics]
+      source_data_location: Snowflake
+      source_table_names: [EIAM_DB.PHDP_CYBR_IAM.IDENTITY_REPORTS_IAM_RESOURCE_V3]
+    fatal: false
+    informational: true
+    envs: [local, prod]
+
+  - ingress: evaluated_roles
+    egress: monitoring_metrics
+    type: count_consistency_check
+    options:
+      data_location: OneStream
+      table_names: [etip_controls_monitoring_metrics]
+      source_data_location: Snowflake
+      source_table_names: [EIAM_DB.PHDP_CYBR_IAM.IDENTITY_REPORTS_CONTROLS_VIOLATIONS_STREAM_V2]
+    fatal: false
+    informational: true
+    envs: [local, prod]
+
+# ----------------------------------------------------------------------
+# Load
+# ----------------------------------------------------------------------
+load: {}
+
+# ======================================================================
+# End of Machine IAM Preventative Pipeline Configuration
+# ======================================================================
