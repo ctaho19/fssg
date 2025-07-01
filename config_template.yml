@@ -123,10 +123,8 @@ stages:
           table_name: <FQ_TABLE_NAME>
 
   # 3️⃣ TRANSFORM ───────────────────────────────────────────────────────
-  transform:
+  transform: {}
     # Insert transformation logic or leave blank if N/A
-    # Example:
-    # partition_by: yyyy-mm-dd
 
   # 4️⃣ EGRESS VALIDATION ───────────────────────────────────────────────
   egress_validation:
@@ -163,7 +161,7 @@ stages:
       type: count_consistency_check
       options:
         data_location       : OneStream
-        table_names         : [etip_controls_monitoring_metrics]
+        table_names         : [etip_controls_monitoring_metrics_details table (thats the prod threshold table)]
         source_data_location: Snowflake
         source_table_names  : [<FQ_TABLE_NAME>]
       fatal: false
@@ -175,7 +173,7 @@ stages:
       type: count_consistency_check
       options:
         data_location       : OneStream
-        table_names         : [etip_controls_monitoring_metrics]
+        table_names         : [dataset name]
         source_data_location: Snowflake
         source_table_name   : <FQ_TABLE_NAME>
       fatal: false
@@ -187,7 +185,7 @@ stages:
       type: count_consistency_check
       options:
         data_location       : OneStream
-        table_names         : [etip_controls_monitoring_metrics]
+        table_names         : [dataset name]
         source_data_location: Snowflake
         source_table_names  : [<FQ_TABLE_NAME>]
       fatal: false
