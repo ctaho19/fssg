@@ -1,7 +1,4 @@
-"""CloudRadar Controls Pipeline - Monitoring for multiple controls via CloudRadar API."""
-
 import json
-import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -13,8 +10,6 @@ from connectors.api import OauthApi
 from connectors.ca_certs import C1_CERT_FILE
 from connectors.exchange.oauth_token import refresh
 from etip_env import Env
-
-logger = logging.getLogger(__name__)
 
 # Control configuration mapping for CloudRadar-based controls
 CONTROL_CONFIGS = {
@@ -44,10 +39,22 @@ CONTROL_CONFIGS = {
     },
 }
 
-# Temporary overrides for known KMS key data quality issues
-# TODO: Remove when CloudRadar reporting is corrected
-# Values: "COMPLIANT", "NON_COMPLIANT", or "EXCLUDE"
-KMS_KEY_OVERRIDES = {}
+# TODO: TEMPORARY HARDCODED SOLUTION - Remove when CTRL-1077224 false reporting is fixed
+# This dictionary allows manual override of specific KMS keys that are falsely reporting
+CTRL_1077224_HARDCODED_OVERRIDES = {
+    # Format: "arn": "override_status"
+    # override_status options:
+    #   "FORCE_COMPLIANT" - Force this key to be marked as compliant regardless of actual status
+    #   "FORCE_NON_COMPLIANT" - Force this key to be marked as non-compliant regardless of actual status  
+    #   "EXCLUDE" - Remove this key from processing entirely
+    
+    # Example entries (replace with actual problematic ARNs):
+    # "arn:aws:kms:us-east-1:123456789012:key/abc12345-1234-1234-1234-123456789012": "FORCE_COMPLIANT",
+    # "arn:aws:kms:us-west-2:123456789012:key/def67890-5678-5678-5678-567890123456": "FORCE_NON_COMPLIANT",
+    # "arn:aws:kms:eu-west-1:123456789012:key/ghi13579-9135-9135-9135-913579135791": "EXCLUDE",
+    
+    # Add problematic KMS key ARNs here:
+}
 
 
 def run(env: Env, is_load: bool = True, dq_actions: bool = True):
@@ -306,33 +313,60 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
         
         return None
     
-    def _apply_kms_overrides(self, resources: List[Dict]) -> List[Dict]:
-        """Apply temporary overrides for KMS keys with known data quality issues."""
-        if not KMS_KEY_OVERRIDES:
+    def _apply_hardcoded_overrides(self, resources: List[Dict], control_id: str) -> List[Dict]:
+        """
+        TEMPORARY METHOD: Apply hardcoded overrides for falsely reporting resources
+        TODO: Remove this method when CTRL-1077224 false reporting issue is resolved
+        
+        Args:
+            resources: List of resource dictionaries
+            control_id: The control ID being processed
+            
+        Returns:
+            List of resources with overrides applied
+        """
+        if control_id != "CTRL-1077224" or not CTRL_1077224_HARDCODED_OVERRIDES:
             return resources
         
-        result = []
-        override_stats = {"excluded": 0, "overridden": 0}
+        filtered_resources = []
+        override_count = 0
         
         for resource in resources:
-            arn = resource.get("amazonResourceName", "")
-            override = KMS_KEY_OVERRIDES.get(arn)
+            # Extract resource ARN - try multiple possible fields
+            resource_arn = (
+                resource.get("amazonResourceName") or 
+                resource.get("arn") or 
+                resource.get("resourceId", "")
+            )
             
-            if override == "EXCLUDE":
-                override_stats["excluded"] += 1
-                continue
-            elif override in ("COMPLIANT", "NON_COMPLIANT"):
-                resource = resource.copy()
-                resource["_override"] = override
-                result.append(resource)
-                override_stats["overridden"] += 1
+            if resource_arn in CTRL_1077224_HARDCODED_OVERRIDES:
+                override_action = CTRL_1077224_HARDCODED_OVERRIDES[resource_arn]
+                override_count += 1
+                
+                if override_action == "EXCLUDE":
+                    # Skip this resource entirely
+                    print(f"HARDCODED OVERRIDE: Excluding KMS key {resource_arn}")
+                    continue
+                elif override_action in ["FORCE_COMPLIANT", "FORCE_NON_COMPLIANT"]:
+                    # Mark resource with override metadata
+                    resource = resource.copy()
+                    resource["_hardcoded_override"] = True
+                    resource["_override_action"] = override_action
+                    resource["_forced_compliant"] = (override_action == "FORCE_COMPLIANT")
+                    print(f"HARDCODED OVERRIDE: {override_action} for KMS key {resource_arn}")
+                    filtered_resources.append(resource)
+                else:
+                    # Unknown override action, keep original
+                    print(f"WARNING: Unknown override action '{override_action}' for {resource_arn}")
+                    filtered_resources.append(resource)
             else:
-                result.append(resource)
+                # No override, keep original resource
+                filtered_resources.append(resource)
         
-        if any(override_stats.values()):
-            logger.info(f"KMS overrides applied: {override_stats}")
+        if override_count > 0:
+            print(f"Applied {override_count} hardcoded overrides for {control_id}")
         
-        return result
+        return filtered_resources
 
     def _calculate_control_compliance(
         self,
@@ -345,9 +379,9 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
         now = datetime.now()
         results = []
 
-        # Apply overrides for known data quality issues
-        if control_id == "CTRL-1077224" and KMS_KEY_OVERRIDES:
-            resources = self._apply_kms_overrides(resources)
+        # TEMPORARY: Apply hardcoded overrides for CTRL-1077224 false reporting
+        if control_id == "CTRL-1077224" and CTRL_1077224_HARDCODED_OVERRIDES:
+            resources = self._apply_hardcoded_overrides(resources, control_id)
 
         # Apply resource exclusions
         filtered_resources = self._apply_resource_exclusions(resources, control_config)
@@ -379,9 +413,12 @@ class PLAutomatedMonitoringCloudradarControls(ConfigPipeline):
                 config_value = self._get_config_value(resource, control_config)
                 is_compliant = False
 
-                # Check for override
-                if "_override" in resource:
-                    is_compliant = resource["_override"] == "COMPLIANT"
+                # TEMPORARY: Check for hardcoded override first
+                if resource.get("_hardcoded_override"):
+                    is_compliant = resource.get("_forced_compliant", False)
+                    # Add override indicator to config value for reporting
+                    override_action = resource.get("_override_action", "UNKNOWN")
+                    config_value = f"HARDCODED_OVERRIDE_{override_action}: {config_value}"
                 elif "Tier 1" in tier:
                     #Tier 1: Check if configuration exists and has value
                     is_compliant = (
