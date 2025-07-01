@@ -1,0 +1,145 @@
+pipeline:
+  name: pl_automated_monitoring_dlp_controls
+  use_test_data_on_nonprod: false
+  dq_strict_mode: false
+
+environments:
+  prod:
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds.sql"
+      dlp_outcome:
+        connector: snowflake
+        options:
+          sql: "@text:sql/dlp_tests_outcome.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+  local:
+    extract:
+      thresholds_raw:
+        connector: snowflake
+        options:
+          sql: "@text:sql/monitoring_thresholds.sql"
+      dlp_outcome:
+        connector: snowflake
+        options:
+          sql: "@text:sql/dlp_tests_outcome.sql"
+    load:
+      monitoring_metrics:
+        - connector: onestream
+          options:
+            table_name: etip_controls_monitoring_metrics
+            file_type: AVRO
+            avro_schema: "@json:avro_schema.json"
+            business_application: BAENTERPRISETECHINSIGHTS
+
+stages:
+  - name: ingress_validation
+    description: "Validate data quality of input datasets"
+    envs: [local, prod]
+  - name: extract
+    description: "Extract data from Snowflake"
+    envs: [local, prod]
+  - name: transform
+    description: "Calculate control metrics"
+    envs: [local, prod]
+  - name: egress_validation
+    description: "Validate transformed metrics before loading"
+    envs: [local, prod]
+  - name: load
+    description: "Load metrics to OneStream"
+    envs: [local, prod]
+
+# REQUIRED: Comprehensive Data Quality Validation
+ingress_validation:
+  thresholds_raw:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        required_columns:
+          - monitoring_metric_id
+          - control_id
+          - monitoring_metric_tier
+          - metric_name
+          - metric_description
+          - warning_threshold
+          - alerting_threshold
+          - control_executor
+    - type: count_check
+      fatal: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        check_type: "data_freshness"
+        description: "Ingress data quality check"
+
+  dlp_outcome:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        required_columns:
+          - TEST_ID
+          - TEST_NAME
+          - PLATFORM
+          - EXPECTED_OUTCOME
+          - ACTUAL_OUTCOME
+          - TEST_DESCRIPTION
+          - SF_LOAD_TIMESTAMP
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        data_location: Snowflake
+        threshold: 1
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        description: "DLP outcome data quality check across all platforms"
+
+egress_validation:
+  monitoring_metrics:
+    - type: schema_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        required_columns:
+          - control_monitoring_utc_timestamp
+          - control_id
+          - monitoring_metric_id
+          - monitoring_metric_value
+          - monitoring_metric_status
+          - metric_value_numerator
+          - metric_value_denominator
+    - type: count_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+    - type: consistency_check
+      fatal: false
+      informational: true
+      envs: [local, prod]
+      options:
+        description: "Egress data will not match ingress data due to metric calculations"

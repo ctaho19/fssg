@@ -14,5 +14,5 @@ select
 from
     etip_db.phdp_etip_controls_monitoring.etip_controls_monitoring_metrics_details
 where 
-    metric_threshold_end_date is Null
-    and control_id = 'CTRL-1101994'
+    metric_threshold_end_date is null
+    and control_id in ('CTRL-1080553', 'CTRL-1101994', 'CTRL-1077197')
